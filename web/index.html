@@ -94,11 +94,17 @@
         <h2>Музика</h2>
         <label class="btn ghost small-btn file-btn" for="songFile">Додати пісню</label>
       </div>
-      <input id="songFile" type="file" accept="audio/*" multiple hidden>
+      <!-- Extensions and audio types, not «audio/*»: with the wildcard iOS offers the photo library and the camera first. -->
+      <input id="songFile" type="file" accept=".mp3,.m4a,.aac,.wav,.ogg,.opus,.flac,audio/mpeg,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,audio/flac" multiple hidden>
       <div class="row song-row">
         <select id="songSelect" aria-label="Пісня" disabled><option>Пісень ще немає</option></select>
         <button id="songPlay" class="btn primary" type="button" disabled>▶ Увімкнути</button>
         <button id="songDelete" class="btn ghost" type="button" disabled>Видалити</button>
+      </div>
+      <div class="song-seek">
+        <span id="songTime" class="muted small">0:00</span>
+        <input id="songSeek" type="range" min="0" max="0" step="1" value="0" aria-label="Позиція в пісні" disabled>
+        <span id="songDuration" class="muted small">0:00</span>
       </div>
       <p id="songInfo" class="hint">Пісні спільні для всіх пристроїв і людей: додали з ноутбука — є й на телефоні колеги. Поки грає пісня, помічник на паузі й мовчить, мікрофон вимкнено. Команда «увімкни музику» вмикає вибрану пісню; саму пісню обирають тільки тут.</p>
     </section>

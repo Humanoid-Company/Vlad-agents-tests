@@ -344,4 +344,8 @@ form.card[hidden], [role="tabpanel"][hidden] { display: none; }
 .file-btn { display: inline-block; margin: 0; font-weight: normal; }
 .song-row select { flex: 1 1 100%; }
 .song-row .btn { flex: 1 1 140px; }
+.song-seek { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.song-seek input { flex: 1 1 auto; width: auto; }
+.song-seek span { flex: 0 0 auto; min-width: 2.6em; font-variant-numeric: tabular-nums; }
+.song-seek span:last-child { text-align: right; }
 

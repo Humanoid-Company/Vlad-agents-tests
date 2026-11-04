@@ -2035,6 +2035,34 @@
   const songInfoText = $("songInfo").textContent;
   const songNote = (text) => { $("songInfo").textContent = text || songInfoText; };
 
+  const clock = (sec) => {
+    const t = Math.max(0, Math.floor(sec || 0));
+    const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), r = String(t % 60).padStart(2, "0");
+    return h ? h + ":" + String(m).padStart(2, "0") + ":" + r : m + ":" + r;
+  };
+  let seeking = false; // the slider is being dragged: the song's own position must not pull it back
+
+  // The slider and the times: the song's length, where it is now; dragging it rewinds.
+  function showSeek() {
+    const a = songs.audio;
+    const length = Number.isFinite(a.duration) ? a.duration : 0;
+    $("songSeek").max = String(Math.floor(length));
+    $("songSeek").disabled = !length;
+    if (!seeking) $("songSeek").value = String(Math.floor(length ? a.currentTime : 0));
+    $("songTime").textContent = clock(seeking ? Number($("songSeek").value) : a.currentTime);
+    $("songDuration").textContent = clock(length);
+  }
+
+  // The picked song is loaded (not played) so its length shows and it can be rewound before it starts.
+  function attachSong() {
+    const song = songs.list.find((x) => x.id === songs.current);
+    if (!song || songs.loadedId === song.id) return;
+    songs.audio.preload = "metadata";
+    songs.audio.src = BACKEND + "/api/songs/" + song.id + "/audio";
+    songs.loadedId = song.id;
+    showSeek();
+  }
+
   async function loadSongs() {
     try {
       const res = await fetch(BACKEND + "/api/songs");
@@ -2048,6 +2076,7 @@
     }
     if (!songs.list.some((x) => x.id === songs.current)) songs.current = songs.list.length ? songs.list[0].id : "";
     if (songs.playing && !songs.list.some((x) => x.id === songs.loadedId)) stopSong(); // deleted from another device
+    if (!songs.playing) attachSong();
     showSongs();
   }
 
@@ -2089,7 +2118,7 @@
     const song = songs.list.find((x) => x.id === songs.current);
     if (!song || !confirm("Видалити «" + song.name + "»? Вона зникне для всіх.")) return;
     if (songs.playing && songs.loadedId === song.id) stopSong();
-    if (songs.loadedId === song.id) { songs.audio.removeAttribute("src"); songs.loadedId = ""; }
+    if (songs.loadedId === song.id) { songs.audio.removeAttribute("src"); songs.audio.load(); songs.loadedId = ""; showSeek(); }
     try { await fetch(BACKEND + "/api/songs/" + song.id, { method: "DELETE" }); } catch { /* stays in the list */ }
     songs.current = "";
     await loadSongs();
@@ -2104,10 +2133,7 @@
     if (eva.mode === "active") pauseEva(); // she goes silent first
     if (eva.mode !== "off" && !micMuted) { songs.mutedMic = true; setMicMuted(true); }
     const a = songs.audio;
-    if (songs.loadedId !== song.id) {
-      a.src = BACKEND + "/api/songs/" + song.id + "/audio";
-      songs.loadedId = song.id;
-    }
+    attachSong();
     a.volume = IOS ? 1 : volume;
     if (speakerId && a.setSinkId) a.setSinkId(speakerId).catch(() => {});
     songs.playing = true;
@@ -2148,7 +2174,7 @@
   }
 
   function initMusic() {
-    songs.audio.addEventListener("ended", () => { songs.audio.currentTime = 0; endSong(); });
+    songs.audio.addEventListener("ended", () => { songs.audio.currentTime = 0; endSong(); showSeek(); });
     songs.audio.addEventListener("error", () => {
       if (!songs.playing) return;
       endSong();
@@ -2159,6 +2185,14 @@
       if (songs.playing) stopSong();
       songs.current = $("songSelect").value;
       store.set("va-song", songs.current);
+      attachSong();
+    });
+    for (const ev of ["loadedmetadata", "durationchange", "timeupdate", "seeked"]) songs.audio.addEventListener(ev, showSeek);
+    $("songSeek").addEventListener("input", () => { seeking = true; showSeek(); });
+    $("songSeek").addEventListener("change", () => {
+      songs.audio.currentTime = Number($("songSeek").value);
+      seeking = false;
+      showSeek();
     });
     $("songPlay").addEventListener("click", () => (songs.playing ? stopSong() : playSong()));
     $("songDelete").addEventListener("click", deleteSong);
