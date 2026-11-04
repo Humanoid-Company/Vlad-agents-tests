@@ -30,6 +30,7 @@ from voice.options import (
     LANGUAGE_OPTIONS,
     SPEED_OPTIONS,
     STYLE_OPTIONS,
+    DEFAULT_PERSONA,
     VOICE_PERSONAS,
     _sanitize_name,
     asked_for_language,
@@ -84,6 +85,9 @@ class WebUser:
     conversation: ConversationLog = field(default_factory=lambda: ConversationLog(merge_interleaved=True))
     conversation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     conversation_started_at: float = field(default_factory=time.time)
+    # Whose conversation it is: each character has a memory of its own (see `character`); picking another one
+    # puts the current conversation away and takes that character's own.
+    conversation_character: str = ""
     _save_timer: threading.Timer | None = field(default=None, repr=False)
     _save_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _write_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -102,6 +106,20 @@ class WebUser:
     camera_on: bool = False
     camera_frame: bytes | None = None
     camera_frame_at: float = 0.0
+
+    @property
+    def character(self) -> str:
+        """The character the user is talking to: the picker's tab (the three Степани are one), by its group."""
+        persona = VOICE_PERSONAS.get(self.voice or DEFAULT_PERSONA) or VOICE_PERSONAS[DEFAULT_PERSONA]
+        return persona.group or persona.id
+
+    @property
+    def memory_set(self) -> str:
+        """The knowledge set this character writes down into (knowledge.remember): its own, never another's."""
+        if self.character == DEFAULT_PERSONA:
+            return knowledge.MEMORY_SET
+        persona = VOICE_PERSONAS.get(self.voice or DEFAULT_PERSONA) or VOICE_PERSONAS[DEFAULT_PERSONA]
+        return knowledge.MEMORY_PREFIX + persona.label
 
     def set_camera_frame(self, jpeg: bytes) -> None:
         self.camera_frame, self.camera_frame_at, self.camera_on = jpeg, time.time(), True
@@ -133,6 +151,7 @@ class WebUser:
     def __post_init__(self) -> None:
         self.owner = self.owner or self.client_id
         self.executor = _build_executor(self)
+        self.conversation_character = self.conversation_character or self.character
         self.conversation.on_change = self._save_soon
 
     # ── the conversation in the database (server/conversations.py) ──
@@ -152,7 +171,8 @@ class WebUser:
         with self._write_lock:  # one write at a time: an older snapshot never lands after a newer one
             try:
                 conversations.store.save(
-                    self.conversation_id, self.owner, self.conversation_started_at, self.conversation.to_list()
+                    self.conversation_id, self.owner, self.conversation_started_at, self.conversation.to_list(),
+                    self.conversation_character,
                 )
             except StoreError:
                 logger.warning("web.conversation.save_failed client=%s", self.client_id[:8])
@@ -161,7 +181,7 @@ class WebUser:
         """After a restart: the owner's latest conversation becomes the current one again — unless another
         device of the same account has it open now (two writers would overwrite each other's lines)."""
         try:
-            saved = conversations.store.latest(self.owner)
+            saved = conversations.store.latest(self.owner, self.conversation_character)
         except StoreError:
             return
         if saved and saved["id"] not in in_use and not len(self.conversation):
@@ -180,6 +200,23 @@ class WebUser:
         self.conversation.clear()
         self.guest = None
         self.restore_conversation(in_use)
+
+    def sync_character(self) -> bool:
+        """The picked character changed: the conversation of the one before is saved, and this character's own
+        latest one (or an empty one) becomes the current — so every character remembers only what was said to it.
+        True when it switched."""
+        now = self.character
+        if now == self.conversation_character:
+            return False
+        if len(self.conversation):
+            self.save_conversation()  # under the old character
+        self.conversation_character = now
+        self.conversation_id, self.conversation_started_at = uuid.uuid4().hex, time.time()
+        self.conversation.clear()
+        self.guest = None
+        self.restore_conversation(frozenset())
+        logger.info("web.conversation.character client=%s character=%s turns=%s", self.client_id[:8], now, len(self.conversation))
+        return True
 
     def new_conversation(self) -> None:
         """«Нова розмова»: the current one stays saved (in «Історія»), a new one starts empty."""
@@ -337,7 +374,8 @@ def _build_executor(user: WebUser) -> ToolExecutor:
     def knowledge_lookup(args: dict, ctx: ToolExecutionContext) -> ToolResult:
         query = str(args.get("query") or "").strip()[:300]
         try:
-            found = knowledge.store.lookup(query, str(args.get("set") or ""), with_memory=not user.concierge)
+            found = knowledge.store.lookup(query, str(args.get("set") or ""), with_memory=not user.concierge,
+                                         memory=user.memory_set)
         except knowledge.KnowledgeError as exc:
             return ToolResult(ok=False, status="error", message=f"{exc} Скажи, що зараз не можеш заглянути в записи команди.")
         logger.info("web.knowledge.lookup total=%s shown=%s", found["total"], found["shown"])
@@ -358,7 +396,7 @@ def _build_executor(user: WebUser) -> ToolExecutor:
 
     def _guest_records() -> list:
         """The guest list is what the team uploaded: what Єва wrote down herself never lets anyone in."""
-        return [r for r in knowledge.store.enabled_records()[1] if r.set_name != knowledge.MEMORY_SET]
+        return [r for r in knowledge.store.enabled_records()[1] if not knowledge.is_memory(r.set_name)]
 
     def remember_person(args: dict, ctx: ToolExecutionContext) -> ToolResult:
         name = " ".join(str(args.get("name") or "").split())
@@ -368,7 +406,7 @@ def _build_executor(user: WebUser) -> ToolExecutor:
         else:
             facts = {}
         try:
-            saved = knowledge.store.remember(name, facts)
+            saved = knowledge.store.remember(name, facts, user.memory_set)
         except knowledge.KnowledgeError as exc:
             return ToolResult(ok=False, status="error", message=f"{exc} Скажи, що цього не вдалося записати.")
         logger.info("web.knowledge.remember new=%s", saved["new"])

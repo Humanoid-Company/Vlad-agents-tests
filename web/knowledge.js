@@ -218,7 +218,8 @@
       + (n > pinnedMax ? " — забагато, кінець обріжеться. Відкріпіть або скоротіть щось." : "");
   }
 
-  const MEMORY_SET = "Єва запам'ятала"; // server/knowledge.py MEMORY_SET: never pinned or renamed
+  const MEMORY_SET = "Єва запам'ятала"; // server/knowledge.py MEMORY_SET / MEMORY_PREFIX: never pinned or renamed
+  const isMemory = (name) => name === MEMORY_SET || name.startsWith("Пам'ять: ");
 
   function renderSets(sets) {
     const on = sets.filter((s) => s.enabled).length;
@@ -229,7 +230,7 @@
     }
     $("sets").replaceChildren(...sets.map((s) => {
       const text = s.kind === "text";
-      const own = s.name === MEMORY_SET;
+      const own = isMemory(s.name);
       const body = el("div", { class: text ? "text-view" : "records", hidden: !opened.has(s.id) });
       if (opened.has(s.id)) (text ? fillText : fillRecords)(body, opened.get(s.id), s);
       const view = el("button", { class: "btn small-btn", type: "button", "aria-expanded": String(opened.has(s.id)) },

@@ -211,6 +211,7 @@ def _user_voice(user: WebUser) -> str:
 def _session_config(user: WebUser, *, concierge: bool = False) -> dict:
     """The assistant knows people the way an acquaintance does (knowledge_lookup, remember_person, no check-in);
     the concierge has its own protocol (_concierge_config) and never sees what Єва wrote down herself."""
+    user.sync_character()  # a call always opens with the picked character's own memory
     language = LANGUAGE_OPTIONS.get(user.language, LANGUAGE_OPTIONS["uk"])
     today = local_today()
     voice = _user_voice(user)
@@ -396,6 +397,7 @@ async def create_session(
     user = await asyncio.to_thread(_talker, x_client_id)  # may restore the conversation from the database
     if body.voice and body.voice.strip().lower() in VOICE_PERSONAS:
         user.voice = body.voice.strip().lower()
+    user.sync_character()  # before anything is added: the first words go into this character's own conversation
     _set_voice_variant(user, body.voice_variant)
     if body.speed in SPEED_OPTIONS:
         user.speed = body.speed
@@ -524,6 +526,7 @@ def set_voice(
         if voice not in VOICE_PERSONAS:
             raise HTTPException(status_code=400, detail="unknown_voice")
         user.voice = voice
+        user.sync_character()  # each character has a memory of its own: its conversation comes with it
     _set_voice_variant(user, body.voice_variant)
     delivery_changed = False
     for name, options in (("speed", SPEED_OPTIONS), ("style", STYLE_OPTIONS)):
@@ -764,6 +767,7 @@ def current_conversation(
 ) -> dict:
     """What the page shows on load: the conversation Єва remembers, as it was said."""
     user = _user(x_client_id)
+    user.sync_character()
     return {"id": user.conversation_id, "started_at": user.conversation_started_at,
             "turns": conversations.visible(user.conversation.to_list())}
 
@@ -792,9 +796,11 @@ def conversation_list(
 ) -> dict:
     """This browser's saved conversations, newest first (the current one is marked)."""
     user = _user(x_client_id)
+    user.sync_character()
     user.save_conversation()  # the current one as it is now
+    # Only this character's: each one has its own memory, and «Продовжити» must not mix them.
     return {"current": user.conversation_id, "persistent": conversations.store.persistent,
-            "conversations": _history(conversations.store.list, user.owner)}
+            "conversations": _history(conversations.store.list, user.owner, conversations.LIST_MAX, user.character)}
 
 
 @app.get("/api/conversations/{conv_id}")

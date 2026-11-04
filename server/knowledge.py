@@ -48,6 +48,14 @@ LOOKUP_TOP = 40
 # What Єва writes down herself in conversations (remember()): one set of her own. The concierge's guest list
 # never reads it (server/web_users.py) — whoever she heard about must not become a guest.
 MEMORY_SET = "Єва запам'ятала"
+# Every other character writes down into a set of its own («Пам'ять: Степан»): what one robot learned, another
+# does not know. Єва keeps the old name, so what she has written so far stays hers.
+MEMORY_PREFIX = "Пам'ять: "
+
+
+def is_memory(name: str) -> bool:
+    """A set a character wrote itself (Єва's or another's), not one the team uploaded."""
+    return name == MEMORY_SET or name.startswith(MEMORY_PREFIX)
 # The enabled records, kept between lookups: Neon wakes in ~0.5 s after a pause, and a call asks often.
 SNAPSHOT_TTL_S = 60.0
 
@@ -207,8 +215,8 @@ class KnowledgeStore(SqlStore):
         name = " ".join(name.split())[:MAX_SET_NAME_CHARS]
         if kind not in KINDS:
             raise KnowledgeError("Невідомий тип розділу.")
-        if name == MEMORY_SET:
-            raise KnowledgeError("Ця назва зайнята: так Єва називає те, що записує сама.")
+        if is_memory(name):
+            raise KnowledgeError("Ця назва зайнята: так персонажі називають те, що записують самі.")
         body = _clean_body(body) if kind == "text" else ""
         items = clean_items(items) if kind == "records" else []
         if not name:
@@ -250,13 +258,13 @@ class KnowledgeStore(SqlStore):
         if enabled is not None:
             changes.append(("enabled", bool(enabled)))
         if pinned is not None:
-            if current["name"] == MEMORY_SET:
-                raise KnowledgeError("Записи Єви не закріплюються: вона знаходить їх сама, коли треба.")
+            if is_memory(current["name"]):
+                raise KnowledgeError("Записи персонажа не закріплюються: він знаходить їх сам, коли треба.")
             changes.append(("pinned", bool(pinned)))
         if name is not None and " ".join(name.split()):
             new_name = " ".join(name.split())[:MAX_SET_NAME_CHARS]
-            if MEMORY_SET in (new_name, current["name"]) and new_name != current["name"]:
-                raise KnowledgeError("Цей набір не перейменовується: так Єва називає те, що записує сама.")
+            if (is_memory(new_name) or is_memory(current["name"])) and new_name != current["name"]:
+                raise KnowledgeError("Цей набір не перейменовується: так персонажі називають те, що записують самі.")
             changes.append(("name", new_name))
         if note is not None:
             changes.append(("note", note.strip()[:MAX_NOTE_CHARS]))
@@ -284,7 +292,7 @@ class KnowledgeStore(SqlStore):
         return bool(gone)
 
     # ── what Єва writes down herself ──
-    def remember(self, name: str, fields: dict[str, str]) -> dict[str, Any]:
+    def remember(self, name: str, fields: dict[str, str], memory: str = MEMORY_SET) -> dict[str, Any]:
         """Add facts about a person to Єва's own set: a known person (same name, or the name is part of the
         stored one — «Олег» / «Олег Петренко») gets them written after what is there, a new one gets a record."""
         cleaned = clean_items([{"title": name, "fields": fields}])
@@ -292,14 +300,14 @@ class KnowledgeStore(SqlStore):
             raise KnowledgeError("Нічого запам'ятовувати: потрібні ім'я людини і хоч один факт.")
         title, new = cleaned[0]["title"], cleaned[0]["fields"]
         with self._conn() as conn:
-            row = conn.execute(self._q("SELECT id FROM kb_sets WHERE name = %s"), (MEMORY_SET,)).fetchone()
+            row = conn.execute(self._q("SELECT id FROM kb_sets WHERE name = %s"), (memory,)).fetchone()
             if row:
                 set_id = int(row[0])
             else:
                 set_id = int(conn.execute(
                     self._q("INSERT INTO kb_sets (name, note, source, enabled, item_count, created_at, owner_id, "
                             "owner_name) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id"),
-                    (MEMORY_SET, "Те, що Єва записала зі слів співрозмовників.", "", True, 0, time.time(), None, ""),
+                    (memory, "Те, що персонаж записав зі слів співрозмовників.", "", True, 0, time.time(), None, ""),
                 ).fetchone()[0])
             items = conn.execute(
                 self._q("SELECT id, title, fields, position FROM kb_items WHERE set_id = %s ORDER BY position"),
@@ -356,7 +364,7 @@ class KnowledgeStore(SqlStore):
                     summary.append({"name": name, "note": note, "count": len(sections), "kind": "text",
                                     "titles": [r.title for r in sections][:25]})
                 continue
-            if is_pinned and name != MEMORY_SET:
+            if is_pinned and not is_memory(name):
                 pinned.append(f"## {name}\n" + "\n".join(r.line() for r in own))
                 continue
             summary.append({"name": name, "note": note, "count": int(count), "kind": "records",
@@ -365,7 +373,7 @@ class KnowledgeStore(SqlStore):
         if len(block) > PINNED_MAX_CHARS:
             logger.warning("knowledge.pinned_too_long chars=%s max=%s", len(block), PINNED_MAX_CHARS)
             block = block[:PINNED_MAX_CHARS].rsplit("\n", 1)[0] + "\n[…далі обрізано: забагато в «Завжди пам'ятати»]"
-        pinned_names = {s[1] for s in sets if s[6] and s[4] != "text" and s[1] != MEMORY_SET}
+        pinned_names = {s[1] for s in sets if s[6] and s[4] != "text" and not is_memory(s[1])}
         self._sets_summary, self._snapshot, self._texts = summary, records, texts
         self._looked_up = [r for r in records if r.set_name not in pinned_names]
         self._pinned, self._snapshot_at = block, time.monotonic()
@@ -381,15 +389,17 @@ class KnowledgeStore(SqlStore):
         self._load()
         return self._pinned
 
-    def lookup(self, query: str, set_name: str = "", *, with_memory: bool = True) -> dict[str, Any]:
+    def lookup(self, query: str, set_name: str = "", *, with_memory: bool = True,
+               memory: str = MEMORY_SET) -> dict[str, Any]:
         """Records for the backend model: everything enabled while it fits, else the closest ones. Text sets
         come as their sections; pinned sets are left out (they are in the instructions already).
-        with_memory=False leaves out what Єва wrote down herself (the concierge never shows it)."""
+        A character sees only its own memory set (`memory`): what another wrote down is not its knowledge.
+        with_memory=False leaves out every written-down set (the concierge never shows them)."""
         self._load()
         sets, records = self._sets_summary, [*self._looked_up, *self._texts]
-        if not with_memory:
-            sets = [s for s in sets if s["name"] != MEMORY_SET]
-            records = [r for r in records if r.set_name != MEMORY_SET]
+        own = memory if with_memory else None
+        sets = [s for s in sets if not is_memory(s["name"]) or s["name"] == own]
+        records = [r for r in records if not is_memory(r.set_name) or r.set_name == own]
         if set_name.strip():
             wanted = _best_set(set_name, [s["name"] for s in sets])
             if wanted:

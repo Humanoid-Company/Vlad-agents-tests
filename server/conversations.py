@@ -1,7 +1,8 @@
 """Every web conversation, kept in the database (server/db.py), so neither a page refresh nor a deploy loses it.
 
-A browser (its client id) has one current conversation: what Єва remembers and what the page shows after a
-refresh. «Нова розмова» starts another; the old one stays here, listed on the page «Історія», where it can be
+A browser (its client id) has one current conversation per character: what that character remembers and what
+the page shows after a refresh (each character has a memory of its own — «character»; rows from before have
+none and count as Єва's). «Нова розмова» starts another; the old one stays here, listed on the page «Історія», where it can be
 read, continued or deleted. A conversation is one row: its turns as JSON, rewritten as it grows (at most a
 few hundred turns — voice/conversation.py keeps 400).
 """
@@ -61,42 +62,58 @@ def _title(turns: list[dict[str, str]]) -> str:
     return text if len(text) <= TITLE_CHARS else text[: TITLE_CHARS - 1].rstrip() + "…"
 
 
+DEFAULT_CHARACTER = "willow"
+
+
 class ConversationStore(SqlStore):
     SCHEMA = _SCHEMA
+    ADDED_COLUMNS = [("conversations", "character", {"postgres": "TEXT NOT NULL DEFAULT ''", "sqlite": "TEXT NOT NULL DEFAULT ''"})]
     UNAVAILABLE = "Історія розмов недоступна"
     FAILED = "Помилка історії розмов"
 
-    def save(self, conv_id: str, client_id: str, started_at: float, turns: list[dict[str, str]]) -> None:
+    def save(self, conv_id: str, client_id: str, started_at: float, turns: list[dict[str, str]],
+             character: str = DEFAULT_CHARACTER) -> None:
         """Write the whole conversation (insert or replace). One where the user said nothing yet (a new
         one, a greeting) is kept too — it is the current one after a restart — but not listed."""
         with self._conn() as conn:
             conn.execute(
                 self._q(
-                    "INSERT INTO conversations (id, client_id, started_at, updated_at, title, turn_count, turns) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET "
+                    "INSERT INTO conversations (id, client_id, started_at, updated_at, title, turn_count, turns, "
+                    "character) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET "
                     "updated_at = excluded.updated_at, title = excluded.title, "
-                    "turn_count = excluded.turn_count, turns = excluded.turns"
+                    "turn_count = excluded.turn_count, turns = excluded.turns, character = excluded.character"
                 ),
                 (conv_id, client_id, started_at, time.time(), _title(turns), len(visible(turns)),
-                 json.dumps(turns, ensure_ascii=False)),
+                 json.dumps(turns, ensure_ascii=False), character),
             )
 
-    def latest(self, client_id: str) -> dict[str, Any] | None:
-        """The browser's most recent conversation, with its turns (restored after a restart)."""
+    @staticmethod
+    def _of_character(character: str) -> tuple[str, tuple[str, ...]]:
+        """The WHERE part and its arguments for one character's rows (rows from before count as Єва's)."""
+        if character == DEFAULT_CHARACTER:
+            return "(character = %s OR character = '')", (character,)
+        return "character = %s", (character,)
+
+    def latest(self, client_id: str, character: str = DEFAULT_CHARACTER) -> dict[str, Any] | None:
+        """The character's most recent conversation in this browser, with its turns (restored after a restart
+        and when the character is picked again)."""
+        where, args = self._of_character(character)
         with self._conn() as conn:
             row = conn.execute(
                 self._q("SELECT id, started_at, updated_at, title, turn_count, turns FROM conversations "
-                        "WHERE client_id = %s ORDER BY updated_at DESC LIMIT 1"),
-                (client_id,),
+                        f"WHERE client_id = %s AND {where} ORDER BY updated_at DESC LIMIT 1"),
+                (client_id, *args),
             ).fetchone()
         return self._row(row, with_turns=True) if row else None
 
-    def list(self, client_id: str, limit: int = LIST_MAX) -> list[dict[str, Any]]:
+    def list(self, client_id: str, limit: int = LIST_MAX, character: str | None = None) -> list[dict[str, Any]]:
+        """Saved conversations, newest first; with `character` only that character's."""
+        where, args = self._of_character(character) if character else ("1 = 1", ())
         with self._conn() as conn:
             rows = conn.execute(
                 self._q("SELECT id, started_at, updated_at, title, turn_count FROM conversations "
-                        "WHERE client_id = %s AND title <> '' ORDER BY updated_at DESC LIMIT %s"),
-                (client_id, limit),
+                        f"WHERE client_id = %s AND title <> '' AND {where} ORDER BY updated_at DESC LIMIT %s"),
+                (client_id, *args, limit),
             ).fetchall()
         return [self._row(r) for r in rows]
 
@@ -104,7 +121,7 @@ class ConversationStore(SqlStore):
         """One conversation — only the browser's own (another id is «not found»)."""
         with self._conn() as conn:
             row = conn.execute(
-                self._q("SELECT id, started_at, updated_at, title, turn_count, turns FROM conversations "
+                self._q("SELECT id, started_at, updated_at, title, turn_count, turns, character FROM conversations "
                         "WHERE client_id = %s AND id = %s"),
                 (client_id, conv_id),
             ).fetchone()
@@ -130,6 +147,8 @@ class ConversationStore(SqlStore):
                                 "title": r[3], "count": int(r[4])}
         if with_turns:
             data["turns"] = json.loads(r[5])
+        if len(r) > 6:
+            data["character"] = r[6] or DEFAULT_CHARACTER
         return data
 
 

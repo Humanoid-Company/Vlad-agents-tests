@@ -1679,12 +1679,17 @@
   async function applyVoice() {
     const id = $("voice").value;
     if (!voices.some((x) => x.id === id) || id === voice) return;
+    // Each character has its own memory: another tab shows its own conversation (the three Степани are one).
+    const before = voices.find((x) => x.id === voice), after = voices.find((x) => x.id === id);
+    const otherCharacter = !before || groupOf(before) !== groupOf(after);
     voice = id;
     store.set("va-voice", id);
     showVoice();
+    if (otherCharacter) clearLog();
     // Not awaited: the new call carries the voice itself (/api/session), this only keeps the server
-    // in step (it remembers the voice).
-    fetch(BACKEND + "/api/voice", { method: "POST", headers: headers(), body: JSON.stringify({ voice: id, voice_variant: variantFor(id) }) }).catch(() => {});
+    // in step (it remembers the voice and swaps to this character's conversation).
+    fetch(BACKEND + "/api/voice", { method: "POST", headers: headers(), body: JSON.stringify({ voice: id, voice_variant: variantFor(id) }) })
+      .then(() => { if (otherCharacter) loadConversation(); }).catch(() => {});
     reconnectForVoice({
       now: "Голос змінено на «" + voiceLabel(id) + "».",
       later: "Персонаж зміниться на «" + voiceLabel(id) + "», щойно договорить поточну відповідь.",
