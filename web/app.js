@@ -469,7 +469,7 @@
   };
 
   const songs = { list: [], current: store.get("va-song") || "", audio: new Audio(), loadedId: "",
-    playing: false, mutedMic: false, buf: "", timer: null };
+    playing: false, primed: false, pending: false, pendingSince: 0, pendingTimer: null, mutedMic: false, buf: "", timer: null };
   songs.audio.setAttribute("playsinline", "");
   const MUSIC_REQUEST_RE = /(увімкн|включ|запуст|постав|заграй|пусти)[а-яіїєґ']*[\s,]+([^\s,]+[\s,]+){0,2}?(музик|пісн|пісе|трек)/i;
 
@@ -478,6 +478,7 @@
     if (m === "off") return; // stop() sets its own text
     let state;
     if (songs.playing && m !== "connecting" && m !== "switching") state = ["Грає пісня — " + callName + " мовчить", "wait"];
+    else if (songs.pending && m === "active") state = ["Пісня почнеться, щойно " + callName + " договорить", "wait"];
     else if (micMuted && m !== "connecting" && m !== "switching") state = ["Мікрофон вимкнено — " + callName + " нічого не чує", "wait"];
     else if (m === "connecting") state = ["Підключаюсь…", "busy"];
     else if (m === "switching") state = ["Перемикаю голос…", "busy"];
@@ -1334,7 +1335,7 @@
 
   function wakeEva(rest, heard = "") {
     if (eva.mode !== "waiting") return;
-    if (songs.playing) stopSong(); // she speaks again: the song ends
+    if (songs.playing || songs.pending) stopSong(); // she speaks again: the song ends
     clearTimeout(eva.pauseTimer);
     const note = overheardNote(flushOverheard((heard || "") + " " + (rest || ""))); // a promise: never delays the wake
     if (rest) addLine("user", callName + ", скажи, " + rest);
@@ -2087,7 +2088,7 @@
     $("songSelect").disabled = !has;
     $("songPlay").disabled = !has;
     $("songDelete").disabled = !has;
-    $("songPlay").textContent = songs.playing ? "■ Зупинити" : "▶ Увімкнути";
+    $("songPlay").textContent = songs.playing ? "■ Зупинити" : songs.pending ? "✕ Скасувати" : "▶ Увімкнути";
   }
 
   async function addSongs(files) {
@@ -2128,9 +2129,57 @@
   function playSong() {
     const song = songs.list.find((x) => x.id === songs.current);
     if (!song) { addLine("system", "Спершу додайте пісню в панелі «Музика»."); return; }
-    if (songs.playing) return;
+    if (songs.playing || songs.pending) return;
     if (eva.mode === "connecting" || eva.mode === "switching") { addLine("system", "Зачекайте, поки розмова підключиться, і вмикайте пісню."); return; }
-    if (eva.mode === "active") pauseEva(); // she goes silent first
+    if (eva.mode === "active" && sheIsBusy()) { queueSong(); return; } // she finishes her phrase first
+    startSong();
+  }
+
+  // She is talking, the user is talking, or an answer is on its way (or she went quiet for less than a breath).
+  const sheIsBusy = () => barge.audible || barge.speaking || eva.thinking
+    || Date.now() - Math.max(barge.audibleEndedAt, eva.lastAudibleAt) < SONG_AFTER_QUIET_MS;
+  const SONG_AFTER_QUIET_MS = 1200;
+  const SONG_WAIT_MAX_MS = 20000; // an answer that never came must not hold the song forever
+
+  // iOS lets a page start audio only from a tap: a short silent play inside one unlocks this element for the
+  // song that starts later, after she has finished (no tap then).
+  function primeSong() {
+    const a = songs.audio;
+    if (songs.primed || !songs.loadedId || songs.playing) return;
+    songs.primed = true;
+    const at = a.currentTime;
+    a.muted = true;
+    a.play().then(() => {
+      if (!songs.playing) { a.pause(); a.currentTime = at; }
+      a.muted = false;
+    }).catch(() => { a.muted = false; songs.primed = false; });
+  }
+
+  function queueSong() {
+    songs.pending = true;
+    songs.pendingSince = Date.now();
+    songs.pendingTimer = setInterval(() => {
+      if (!songs.pending) { clearInterval(songs.pendingTimer); return; }
+      const stuck = !barge.audible && Date.now() - songs.pendingSince > SONG_WAIT_MAX_MS;
+      if (eva.mode === "active" && sheIsBusy() && !stuck) return;
+      const song = songs.list.find((x) => x.id === songs.current);
+      cancelPending();
+      if (song && !songs.playing) startSong();
+    }, 300);
+    showSongs();
+    showState();
+  }
+
+  function cancelPending() {
+    if (!songs.pending) return;
+    songs.pending = false;
+    clearInterval(songs.pendingTimer);
+    showSongs();
+    if (eva.mode !== "off") showState();
+  }
+
+  function startSong() {
+    if (eva.mode === "active") pauseEva(); // she goes silent now
     if (eva.mode !== "off" && !micMuted) { songs.mutedMic = true; setMicMuted(true); }
     const a = songs.audio;
     attachSong();
@@ -2146,6 +2195,7 @@
   }
 
   function stopSong() {
+    cancelPending();
     songs.audio.pause();
     endSong();
   }
@@ -2182,7 +2232,7 @@
     });
     $("songFile").addEventListener("change", (e) => { addSongs([...e.target.files]); e.target.value = ""; });
     $("songSelect").addEventListener("change", () => {
-      if (songs.playing) stopSong();
+      if (songs.playing || songs.pending) stopSong();
       songs.current = $("songSelect").value;
       store.set("va-song", songs.current);
       attachSong();
@@ -2194,7 +2244,11 @@
       seeking = false;
       showSeek();
     });
-    $("songPlay").addEventListener("click", () => (songs.playing ? stopSong() : playSong()));
+    $("songPlay").addEventListener("click", () => {
+      if (songs.playing || songs.pending) { stopSong(); return; }
+      primeSong();
+      playSong();
+    });
     $("songDelete").addEventListener("click", deleteSong);
     loadSongs();
     // Another device may have added or removed songs: look again when the page comes back and every half minute.
@@ -2666,7 +2720,8 @@
     $("talk").addEventListener("click", () => {
       if (eva.mode !== "off") { stop(); return; }
       if (noMicReason()) { showNoMic(); setStatus("Немає доступу до мікрофона", "err"); postDiag(true); return; }
-      if (songs.playing) stopSong(); // a new call is not started over a song
+      if (songs.playing || songs.pending) stopSong(); // a new call is not started over a song
+      primeSong(); // so that «увімкни музику» later can start the song without a tap
       meterReset(); // a new call counts from zero
       start(defaultStart()); // asks for the mic synchronously, while the tap still counts
       primeAudio(); // then, in the same tap, the audio the gate will use
