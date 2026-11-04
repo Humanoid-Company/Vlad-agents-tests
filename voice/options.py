@@ -5,11 +5,11 @@ import os
 import re
 from dataclasses import dataclass
 
-from voice import blunt_prompt, blunt_rough_prompt
+from voice import blunt_prompt, blunt_rough_prompt, blunt_unsafe_prompt
 from voice.wake_phrases import NAME_FORMS as EVA_NAME_FORMS
 
 # The legacy Realtime engine only accepts these ten preset voice IDs. Exposed to the model as
-# an enum (change_voice in tools/*_schemas.py) so IT does the mapping from whatever the user
+# an enum (the voice enum in tools/*_schemas.py) so IT does the mapping from whatever the user
 # actually said ("постав жіночий голос", "хочу голос марін") to one of these — far more robust
 # than hand-rolling a Ukrainian-phonetic-spelling lookup table for English names.
 VOICE_OPTIONS: tuple[str, ...] = (
@@ -34,7 +34,7 @@ class VoicePersona:
     feminine: bool  # Ukrainian past tense agrees with the speaker: «я зрозуміла» / «я зрозумів»
     character: str  # who is speaking and how: put into the Live instructions
     samples: tuple[str, ...] = ()  # lines in this character's manner (tone reference, not to be quoted)
-    # Its own id in the picker and in change_voice when its voice is another character's too (Віра and Ліна are
+    # Its own id in the picker when its voice is another character's too (Віра and Ліна are
     # both willow); the preset still goes to the API (api_voice).
     key: str = ""
     special: bool = False  # «Особливі» in the picker; never picked for «зміни на чоловічий» / «інший»
@@ -145,7 +145,7 @@ _KISHKA_VOICE = (
 )
 
 # The picker: characters, in display order (women first). Keyed by id (a preset voice id, or its own key when
-# the voice is taken), so a stored choice and the change_voice argument stay plain ids. Their voices were picked
+# the voice is taken), so a stored choice stay plain ids. Their voices were picked
 # by ear by the team on Ukrainian samples; dropped for sounding robotic or choppy in Ukrainian: coral, shimmer,
 # sage, quartz, delta, vesper, beacon, cinder.
 VOICE_PERSONAS: dict[str, VoicePersona] = {
@@ -329,8 +329,8 @@ VOICE_PERSONAS: dict[str, VoicePersona] = {
         ),
         VoicePersona(
             "ash", "Степан",
-            "Старий Степан: бурчить, кепкує, зрідка кине «йолопе» чи «трясця» — "
-            "без злоби. Без особливих послаблень для дітей. Голос Ash.",
+            "Степан: бурчить, кепкує, говорить на більше тем, ніж безпечний; зрідка кине «йолопе», "
+            "«курва» чи «трясця» — без злоби. Без особливих послаблень для дітей. Власний голос.",
             False,
             blunt_rough_prompt.character(),  # the whole prompt is in voice/blunt_rough_prompt.py — edit it there
             blunt_rough_prompt.SAMPLES,
@@ -338,11 +338,28 @@ VOICE_PERSONAS: dict[str, VoicePersona] = {
             special=True,
             own_tone=True,
             backend_note=blunt_rough_prompt.backend_note(),
-            voice_env="OPENAI_VOICE_TOLIK_RAW",
+            voice_env="OPENAI_VOICE_TOLIK",
             voice_description=_TOLIK_VOICE,
             wake_names=("степан", "степане", "степа", "степку", "степані", "stepan", "толік", "толіку"),
             group="blunt",
-            variant_label="Старий Степан",
+            variant_label="Степан",
+        ),
+        VoicePersona(
+            "ash", "Степан",
+            "Небезпечний Степан: той самий двір, але з матюками — лається вільно й густо, без злоби. "
+            "Без послаблень для дітей. Власний голос.",
+            False,
+            blunt_unsafe_prompt.character(),  # the whole prompt is in voice/blunt_unsafe_prompt.py — edit it there
+            blunt_unsafe_prompt.SAMPLES,
+            key="blunt_unsafe",
+            special=True,
+            own_tone=True,
+            backend_note=blunt_unsafe_prompt.backend_note(),
+            voice_env="OPENAI_VOICE_TOLIK",
+            voice_description=_TOLIK_VOICE,
+            wake_names=("степан", "степане", "степа", "степку", "степані", "stepan", "толік", "толіку"),
+            group="blunt",
+            variant_label="Небезпечний Степан",
         ),
         VoicePersona(
             "gleam", "Леся",
@@ -441,91 +458,6 @@ def api_voice(voice_id: str, old_voice: bool = False) -> str | dict[str, str]:
     character has its own voice set in the env — unless the listener chose the old (preset) voice."""
     persona = VOICE_PERSONAS.get(voice_id)
     return persona.api_voice(old_voice) if persona else voice_id
-
-
-# «Єва, зміни голос на чоловічий» — handled by the app itself: the Live model often answers
-# «Секунду» and never delegates the change. The request needs a change verb near «голос».
-VOICE_REQUEST_RE = re.compile(
-    r"(змін|змин|поміня|постав|переключ|перемкн|увімкн|зроби|давай)\w*[\s,]+(\S+[\s,]+){0,3}?голос(?:у|а|ом)?\b"
-    r"|\bголос\s+на\s",
-    re.IGNORECASE,
-)
-# Picker names as people say them (stems, so «Босу», «Марину», «Віллоу» all match), and voice ids.
-_VOICE_NAME_STEMS: dict[str, str] = {
-    "мілан": "bossa", "єва": "willow", "єву": "willow", "єво": "willow",
-    "галя": "marin", "галю": "marin", "галі": "marin", "бабус": "marin", "бабу": "marin",
-    "ліна": "lina", "ліну": "lina", "ліно": "lina", "ліни": "lina", "готк": "lina",
-    "вітя": "ripple", "вітю": "ripple", "віть": "ripple", "віті": "ripple", "ботанік": "ripple",
-    "тарас": "meridian",
-    "груб": "blunt_rough", "стар": "blunt_rough", "справжн": "blunt_rough", "нецензур": "blunt_rough",
-    "простог": "blunt_rough", "степан": "blunt", "степа": "blunt", "толік": "blunt", "толя": "blunt", "толю": "blunt", "хуліган": "blunt", "прямолін": "blunt",
-    "леся": "lesia", "лесю": "lesia", "лесі": "lesia", "робокіт": "lesia", "робокот": "lesia", "робокішк": "lesia",
-    "кота": "kit", "котик": "kit", "котяр": "kit", "кіт": "kit", "кішк": "kit", "киц": "kit",
-}
-
-
-_VOICE_WORDS = ("голос", "voice", "чолов", "жіноч", "спокійн", "тихіш", "м'якш")
-_SWITCH_VERBS = ("змін", "змин", "поміня", "постав", "переключ", "перемкн", "увімкн", "давай", "хочу", "поклич",
-                 "покличте", "дай")
-
-
-def asked_for_voice_change(utterances: list[str] | None) -> bool:
-    """Did the user's last words mention the voice at all? The model sometimes calls change_voice on
-    its own («Розкажи щось» → a new voice); None = no transcript to judge by, so allow it."""
-    if utterances is None:
-        return True
-    text = " ".join(utterances[-2:]).lower().replace("’", "'")
-    words = re.findall(r"[a-zа-яіїєґ']+", text)
-    if any(w in text for w in _VOICE_WORDS):
-        return True
-    # A character's name only with a wish to switch: they call each one by name («Степан, розкажи щось»).
-    named = any(w in VOICE_PERSONAS or any(w.startswith(stem) for stem in _VOICE_NAME_STEMS) for w in words)
-    return named and any(w.startswith(_SWITCH_VERBS) for w in words)
-
-
-def voice_request_target(text: str, current: str | None) -> str | None:
-    """The picker voice a «зміни голос …» request asks for; None if it isn't one or is unclear.
-
-    Only an explicit wish switches: a gender, a name, «інший», «спокійніший», or a bare «зміни
-    голос». A cut-off transcript («зміни голос на …» and nothing usable) changes nothing — the model
-    heard the audio and may still delegate it.
-    """
-    match = VOICE_REQUEST_RE.search(text or "")
-    if not match:
-        return None
-    # Look only at the request itself, not at whatever was said before or after it.
-    words = re.findall(r"[a-zа-яіїєґ']+", text[match.start(): match.end() + 40].lower())
-    tail = text[match.end():].strip(" .,!?…").lower()
-    qualified = any(
-        w in VOICE_PERSONAS or any(w.startswith(stem) for stem in _VOICE_NAME_STEMS)
-        or w.startswith(("чолов", "жіноч", "інш", "спокійн", "тихіш", "м'якш"))
-        for w in words
-    )
-    if not qualified and tail:
-        return None
-    for word in words:
-        if word in VOICE_PERSONAS:
-            return word
-        for stem, voice in _VOICE_NAME_STEMS.items():
-            if word.startswith(stem):
-                return voice
-    women = [p.id for p in VOICE_PERSONAS.values() if p.feminine and not p.special]
-    men = [p.id for p in VOICE_PERSONAS.values() if not p.feminine and not p.special]
-    now = VOICE_PERSONAS.get(current or "")
-    if any(w.startswith("чолов") for w in words):
-        pool = men
-    elif any(w.startswith("жіноч") for w in words):
-        pool = women
-    else:
-        pool = women if (now is None or now.feminine) else men
-    if any(w.startswith("спокійн") or w.startswith("тихіш") or w.startswith("м'якш") for w in words):
-        calm = "willow" if pool is women else "meridian"
-        if calm != current:
-            return calm
-    # «інший» / just «зміни голос» / «на чоловічий» when already a man: the next one in the list.
-    if current in pool:
-        return pool[(pool.index(current) + 1) % len(pool)]
-    return pool[0]
 
 
 # Speed and style of delivery. GPT-Live has no speed/pitch parameter, so these are instructions

@@ -72,21 +72,6 @@ def test_wake_phrase_wakes_and_carries_the_request():
     assert bot.state == State.SLEEPING
 
 
-def test_voice_request_in_transcript_switches_without_the_model(monkeypatch):
-    log = ConversationLog()
-    asked: list[str] = []
-    session = _session(log)
-    session._on_voice_request = lambda text: asked.append(text) or True
-
-    async def run():
-        for delta in ["Єва, зміни голос ", "на чоловічий"]:
-            await session._handle_event({"type": "session.input_transcript.delta", "delta": delta})
-        await asyncio.sleep(1.2)  # the request ends after a short pause
-
-    asyncio.run(run())
-    assert asked == ["Єва, зміни голос на чоловічий"]
-
-
 def test_desktop_session_sends_an_own_voice_as_an_id_object(monkeypatch):
     monkeypatch.setenv("OPENAI_VOICE_TARAS", "voice_taras_test")
     assert _session(ConversationLog(), voice="meridian")._session_config()["audio"]["output"]["voice"] == {"id": "voice_taras_test"}

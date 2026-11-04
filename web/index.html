@@ -84,13 +84,34 @@
         <button id="nextGuest" class="btn" hidden>Наступний гість</button>
       </div>
       <p id="wakeHint" class="hint">Покличте помічника на ім'я — «…, скажи», «Привіт, …». «Дякую, …» — пауза.</p>
-      <label class="setting" for="bgListen">
-        <span class="setting-text">
-          <span class="setting-title">Слухати фоном на паузі</span>
-          <span id="bgListenInfo" class="hint">Помічник запам'ятовує, про що говорять поруч, і може нагадати.</span>
-        </span>
-        <input id="bgListen" type="checkbox" class="switch" role="switch" checked>
-      </label>
+    </section>
+
+    <section id="musicCard" class="card">
+      <div class="card-head">
+        <h2>Музика</h2>
+        <label class="btn ghost small-btn file-btn" for="songFile">Додати пісню</label>
+      </div>
+      <input id="songFile" type="file" accept="audio/*" multiple hidden>
+      <div class="row song-row">
+        <select id="songSelect" aria-label="Пісня" disabled><option>Пісень ще немає</option></select>
+        <button id="songPlay" class="btn primary" type="button" disabled>▶ Увімкнути</button>
+        <button id="songDelete" class="btn ghost" type="button" disabled>Видалити</button>
+      </div>
+      <p id="songInfo" class="hint">Пісні спільні для всіх пристроїв і людей: додали з ноутбука — є й на телефоні колеги. Поки грає пісня, помічник на паузі й мовчить, мікрофон вимкнено. Команда «увімкни музику» вмикає вибрану пісню; саму пісню обирають тільки тут.</p>
+    </section>
+
+    <section id="conversation" class="card">
+      <div class="card-head">
+        <h2>Розмова</h2>
+        <div class="head-actions">
+          <a id="historyLink" class="btn ghost small-btn" href="history.html" title="Усі збережені розмови">Історія</a>
+          <button id="copyChat" class="btn ghost small-btn">Скопіювати</button>
+          <button id="newChat" class="btn ghost small-btn">Нова розмова</button>
+        </div>
+      </div>
+      <div id="log" class="log" aria-live="polite">
+        <p class="muted empty">Тут з'являтиметься текст розмови.</p>
+      </div>
     </section>
 
     <section id="devices" class="card">
@@ -121,6 +142,13 @@
       <p id="devicesNow" class="devices-now"></p>
       <button id="devicesAllow" class="btn small-btn" type="button" hidden>Показати пристрої</button>
       <p id="devicesInfo" class="hint">Назви пристроїв з'являться, коли браузер дасть доступ до мікрофона.</p>
+      <label class="setting" for="bgListen">
+        <span class="setting-text">
+          <span class="setting-title">Слухати фоном на паузі</span>
+          <span id="bgListenInfo" class="hint">Помічник запам'ятовує, про що говорять поруч, і може нагадати.</span>
+        </span>
+        <input id="bgListen" type="checkbox" class="switch" role="switch" checked>
+      </label>
     </section>
 
     <section id="voiceCard" class="card">
@@ -159,20 +187,6 @@
         </span>
         <input id="voiceNow" type="checkbox" class="switch" role="switch" checked>
       </label>
-    </section>
-
-    <section id="conversation" class="card">
-      <div class="card-head">
-        <h2>Розмова</h2>
-        <div class="head-actions">
-          <a id="historyLink" class="btn ghost small-btn" href="history.html" title="Усі збережені розмови">Історія</a>
-          <button id="copyChat" class="btn ghost small-btn">Скопіювати</button>
-          <button id="newChat" class="btn ghost small-btn">Нова розмова</button>
-        </div>
-      </div>
-      <div id="log" class="log" aria-live="polite">
-        <p class="muted empty">Тут з'являтиметься текст розмови.</p>
-      </div>
     </section>
 
     <footer class="muted small">Розмови зберігаються на сервері й лишаються після оновлення сторінки — усі вони в «Історії».</footer>

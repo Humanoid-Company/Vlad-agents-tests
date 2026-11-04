@@ -31,12 +31,9 @@ from voice.options import (
     SPEED_OPTIONS,
     STYLE_OPTIONS,
     VOICE_PERSONAS,
-    VOICE_REQUEST_RE,
     _sanitize_name,
     asked_for_language,
-    asked_for_voice_change,
     delivery_instruction,
-    voice_request_target,
 )
 
 logger = logging.getLogger(__name__)
@@ -111,23 +108,6 @@ class WebUser:
 
     def camera_off(self) -> None:
         self.camera_on, self.camera_frame, self.camera_frame_at = False, None, 0.0
-
-    def switch_voice_by_request(self, utterance: str) -> bool:
-        """«Єва, зміни голос на …» heard in the transcript: switch now (the page reconnects)."""
-        if time.time() - self.voice_switched_at < VOICE_SWITCH_DEDUP_S:
-            return False
-        voice = voice_request_target(utterance, self.voice)
-        if voice is None or voice == self.voice:
-            return False
-        # The matched words are logged so a voice switch nobody asked for can be traced.
-        match = VOICE_REQUEST_RE.search(utterance)
-        heard = utterance[match.start(): match.end() + 30] if match else ""
-        logger.info("web.voice.by_request %s → %s heard=%r", self.voice, voice, heard)
-        self.voice_switch_note = f"почула: «{heard.strip()}»"
-        self.voice = voice
-        self.reconnect_pending = True
-        self.voice_switched_at = time.time()
-        return True
 
     def must_keep_session(self) -> bool:
         """A pause closes the Live session after 15 s (web/config.js) — but not while a tool still runs in it."""
@@ -294,35 +274,6 @@ def _build_executor(user: WebUser) -> ToolExecutor:
             status="ok",
             message=f"Мову змінено на {lang_name}. Нічого про це не кажи: просто говори далі цією мовою, а "
             "якщо вже почала відповідати — продовжуй, не починай заново.",
-        )
-
-    def change_voice(args: dict, ctx: ToolExecutionContext) -> ToolResult:
-        voice = str(args.get("voice") or "").strip().lower()
-        # Only the voices offered in the page's picker, so the picker can always show the choice.
-        if voice not in VOICE_PERSONAS:
-            names = ", ".join(f"{p.label} ({p.id})" for p in VOICE_PERSONAS.values())
-            return ToolResult(ok=False, status="needs_more_info", message=f"Такого голосу немає. Доступні: {names}.")
-        if voice == user.voice or time.time() - user.voice_switched_at < VOICE_SWITCH_DEDUP_S:
-            return ToolResult(ok=True, status="ok", message="Голос уже змінено. Нічого про це не кажи.")
-        last = (ctx.user_utterances or [""])[-1][-60:]
-        if not asked_for_voice_change(ctx.user_utterances):
-            logger.info("web.voice.tool_refused voice=%s (user didn't mention the voice)", voice)
-            return ToolResult(
-                ok=False,
-                status="error",
-                message="Користувач не просив змінити голос — не змінюй його, просто продовжуй розмову.",
-            )
-        logger.info("web.voice.by_tool %s → %s last_user=%r", user.voice, voice, last)
-        user.voice_switch_note = f"попросила модель; останнє від вас: «{last}»"
-        user.voice = voice
-        user.reconnect_pending = True
-        user.voice_switched_at = time.time()
-        for bridge in list(user.bridges):
-            bridge.restart_for_voice = True  # the page reconnects with the new voice and the same history
-        return ToolResult(
-            ok=True,
-            status="ok",
-            message="Голос змінено. Нічого про це не кажи — розмова одразу продовжиться новим голосом.",
         )
 
     def set_voice_style(args: dict, ctx: ToolExecutionContext) -> ToolResult:
@@ -541,7 +492,6 @@ def _build_executor(user: WebUser) -> ToolExecutor:
 
     executor.register("set_assistant_name", set_name)
     executor.register("change_language", change_language)
-    executor.register("change_voice", change_voice)
     executor.register("set_voice_style", set_voice_style)
     executor.register("end_conversation", end_conversation)
     executor.register("web_search", web_search, run_in_thread=True)  # network: off the event loop

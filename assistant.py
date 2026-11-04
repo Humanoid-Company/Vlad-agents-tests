@@ -83,7 +83,6 @@ class Assistant(LiveDriverMixin):
         (run_in_thread=True for blocking network / file work)."""
         executor = ToolExecutor()
         executor.register("set_assistant_name", self._live_set_name)
-        executor.register("change_voice", self._live_change_voice)
         executor.register("set_voice_style", self._live_set_voice_style)
         executor.register("change_language", self._live_change_language)
         executor.register("end_conversation", self._live_end_conversation)

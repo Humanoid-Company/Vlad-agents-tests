@@ -143,5 +143,5 @@ def test_live_backend_tools_are_the_session_tools():
 
     names = {t["name"] for t in LIVE_BACKEND_TOOLS}
     assert names == {
-        "set_assistant_name", "change_voice", "set_voice_style", "change_language", "end_conversation", "web_search",
+        "set_assistant_name", "set_voice_style", "change_language", "end_conversation", "web_search",
     }

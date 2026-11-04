@@ -25,16 +25,6 @@ LIVE_BACKEND_TOOLS: list[dict] = [
         required=["name"],
     ),
     _fn(
-        "change_voice",
-        "Change the voice (timbre). The conversation continues in the new voice with its full "
-        "memory after a short pause. «чоловічий / жіночий» → pick one of that gender; «інший» → a "
-        "different one; «спокійніший» → a calm one (Віллоу, Стоун) or use set_voice_style. Voices: "
-        + ", ".join(f"{p.id} ({p.label}, {'жіночий' if p.feminine else 'чоловічий'})" for p in VOICE_PERSONAS.values())
-        + ". blunt only when they ask for «Прямолінійний» by name.",
-        {"voice": {"type": "string", "enum": list(dict.fromkeys([*LIVE_VOICE_OPTIONS, *VOICE_PERSONAS]))}},
-        required=["voice"],
-    ),
-    _fn(
         "set_voice_style",
         "Change how the current voice speaks, applied right away: speed (slow/normal/fast) and "
         "style (calm/normal/expressive). For «говори повільніше / швидше / спокійніше / "

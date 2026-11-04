@@ -29,9 +29,7 @@ from voice.options import (
     STYLE_OPTIONS,
     VOICE_PERSONAS,
     _sanitize_name,
-    asked_for_voice_change,
     delivery_instruction,
-    voice_request_target,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,7 +95,6 @@ class LiveDriverMixin:
             voice=voice,
             session_id=self._session_id,
             conversation=self._conversation,
-            on_voice_request=lambda text: self._voice_by_request(text, voice),
         )
         # A new voice or a reconnect after a dropped line: no greeting, she carries on with the same memory.
         voice_restart = getattr(self, "_voice_restarted", False)
@@ -285,47 +282,6 @@ class LiveDriverMixin:
             return ToolResult(ok=False, status="error", message="Не зрозумів нового імені.")
         msg = self._set_assistant_name(new_name)
         return ToolResult(ok=True, status="ok", message=msg)
-
-    def _live_change_voice(self, args: dict, context: ToolExecutionContext) -> ToolResult:
-        voice = str(args.get("voice", "")).strip().lower()
-        if not asked_for_voice_change(context.user_utterances if context is not None else None):
-            logger.info("live.voice.tool_refused voice=%s (user didn't mention the voice)", voice)
-            return ToolResult(
-                ok=False,
-                status="error",
-                message="Користувач не просив змінити голос — не змінюй його, просто продовжуй розмову.",
-            )
-        if voice not in LIVE_VOICE_OPTIONS and voice not in VOICE_PERSONAS:  # a character may have its own voice
-            return ToolResult(
-                ok=False,
-                status="error",
-                message=f"Голос {voice!r} не підтримується — скажи користувачу спробувати ще раз.",
-            )
-        if time.monotonic() - getattr(self, "_voice_switched_at", -1e9) < 15:
-            return ToolResult(ok=True, status="ok", message="Голос уже змінено. Нічого про це не кажи.")
-        self._voice_switched_at = time.monotonic()
-        self._memory["realtime_voice"] = voice
-        self._memory["live_voice"] = voice
-        self._save_memory()
-        self._voice_change_pending = True
-        if self._live is not None:
-            self._live.request_voice_restart()
-        return ToolResult(
-            ok=True,
-            status="ok",
-            message=(
-                "Голос змінено. Нічого про це не кажи — розмова одразу продовжиться новим голосом."
-            ),
-        )
-
-    def _voice_by_request(self, utterance: str, current: str) -> bool:
-        """«Єва, зміни голос на …» heard in the transcript: switch without waiting for the model."""
-        if time.monotonic() - getattr(self, "_voice_switched_at", -1e9) < 15:
-            return False  # the model already switched for this same request
-        voice = voice_request_target(utterance, current)
-        if voice is None or voice == current:
-            return False
-        return self._live_change_voice({"voice": voice}, ToolExecutionContext(user_utterances=[utterance])).ok
 
     def _live_set_voice_style(self, args: dict, context: ToolExecutionContext) -> ToolResult:
         """Speed/style of the current voice — instructions, applied from the next sentence."""

@@ -39,15 +39,6 @@ def _run_js(code: str) -> str:
     pytest.skip("no JavaScript runtime (node / osascript)")
 
 
-def _voice_request_cases() -> list:
-    from voice.options import VOICE_REQUEST_RE
-
-    texts = ["Єва, зміни голос на чоловічий", "Єва, змини голос на жіночий", "постав інший голос",
-             "поміняй, будь ласка, голос", "давай голос на жіночий", "голос у тебе гарний",
-             "зміни зустріч на завтра", "зроби нагадування про голосування", "Голос на спокійніший"]
-    return [[t, bool(VOICE_REQUEST_RE.search(t))] for t in texts]
-
-
 def test_js_matches_python_rules():
     checks = {
         "wake": [[text, rest] for text, rest in _cases(py.test_wake_variants)],
@@ -62,8 +53,6 @@ C.wake.forEach(function (c) {{ if (matchWake(c[0]) !== c[1]) bad.push("wake " + 
 C.not_wake.forEach(function (t) {{ if (matchWake(t) !== null) bad.push("not_wake " + t); }});
 C.stop.forEach(function (t) {{ if (!isStop(t)) bad.push("stop " + t); }});
 C.not_stop.forEach(function (t) {{ if (isStop(t)) bad.push("not_stop " + t); }});
-var VR = {json.dumps(_voice_request_cases(), ensure_ascii=False)};
-VR.forEach(function (c) {{ if (VOICE_REQUEST_RE.test(c[0]) !== c[1]) bad.push("voice_request " + c[0]); }});
 var OUT = JSON.stringify(bad);
 """
     assert json.loads(_run_js(code).strip()) == []

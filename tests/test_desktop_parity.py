@@ -157,25 +157,6 @@ def _bot():
     return bot
 
 
-def test_voice_change_heard_in_the_transcript_switches():
-    """It crashed on desktop (no tool context) — «зміни голос на чоловічий» did nothing."""
-    bot = _bot()
-    assert bot._voice_by_request("Єва, зміни голос на чоловічий", "gleam")
-    assert bot._voice_change_pending and bot._memory["live_voice"] != "gleam"
-
-
-def test_model_changing_the_voice_unasked_is_refused():
-    bot = _bot()
-    result = bot._live_change_voice({"voice": "cedar"}, ToolExecutionContext(user_utterances=["Розкажи щось"]))
-    assert not result.ok and not bot._voice_change_pending
-
-
-def test_character_with_own_voice_is_accepted_by_change_voice():
-    bot = _bot()
-    result = bot._live_change_voice({"voice": "blunt"}, ToolExecutionContext(user_utterances=["Хочу голос Толіка"]))
-    assert result.ok and bot._memory["live_voice"] == "blunt"
-
-
 # ── «ще роблю» during slow work ──────────────────────────────────────────────
 
 

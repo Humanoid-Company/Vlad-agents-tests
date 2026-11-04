@@ -451,8 +451,6 @@
     return pair ? words.slice(Math.max(pair[0], pair[1]) + 1).join(" ") : null;
   }
   const isStop = (text) => evaPair(evaTokens(text), EVA_STOP_VERBS) !== null;
-  // «зміни голос на …» — same pattern as VOICE_REQUEST_RE in voice/options.py; the server picks the voice.
-  const VOICE_REQUEST_RE = /(змін|змин|поміня|постав|переключ|перемкн|увімкн|зроби|давай)[а-яіїєґ'a-z]*[\s,]+([^\s,]+[\s,]+){0,3}?голос(?:у|а|ом)?(?![а-яіїєґ'a-z])|(^|[^а-яіїєґ'a-z])голос\s+на\s/i;
 
   // mode: off → connecting → waiting («Єва, скажи»; the model is muted) ⇄ active (listening /
   // thinking / speaking); switching = reconnecting with a new voice.
@@ -467,17 +465,20 @@
     thinkTimer: null,
     pauseTimer: null,
     recognizer: null,
-    voiceRequestBusy: false,
-    inputBuf: "",       // the Live transcript of the user's current turn, for «зміни голос …»
-    voiceCheckTimer: null,
     wakeSupported: Boolean(window.SpeechRecognition || window.webkitSpeechRecognition) && params.get("wake") !== "off",
   };
+
+  const songs = { list: [], current: store.get("va-song") || "", audio: new Audio(), loadedId: "",
+    playing: false, mutedMic: false, buf: "", timer: null };
+  songs.audio.setAttribute("playsinline", "");
+  const MUSIC_REQUEST_RE = /(увімкн|включ|запуст|постав|заграй|пусти)[а-яіїєґ']*[\s,]+([^\s,]+[\s,]+){0,2}?(музик|пісн|пісе|трек)/i;
 
   function showState() {
     const m = eva.mode;
     if (m === "off") return; // stop() sets its own text
     let state;
-    if (micMuted && m !== "connecting" && m !== "switching") state = ["Мікрофон вимкнено — " + callName + " нічого не чує", "wait"];
+    if (songs.playing && m !== "connecting" && m !== "switching") state = ["Грає пісня — " + callName + " мовчить", "wait"];
+    else if (micMuted && m !== "connecting" && m !== "switching") state = ["Мікрофон вимкнено — " + callName + " нічого не чує", "wait"];
     else if (m === "connecting") state = ["Підключаюсь…", "busy"];
     else if (m === "switching") state = ["Перемикаю голос…", "busy"];
     else if (m === "waiting" && eva.ready) state = ["На зв'язку — чекаю «Привіт, " + callName + "»", "wait"];
@@ -852,7 +853,7 @@
         appendTranscript("user", event.delta);
         eva.lastUserAt = Date.now();
         eva.recentUser = (eva.recentUser + event.delta).slice(-80);
-        checkVoiceRequest(event.delta);
+        checkMusicRequest(event.delta);
         // «Дякую, Єва» — also while she is talking: cut her off and pause.
         if (isStop(eva.recentUser)) { pauseEva(); break; }
         eva.thinking = true;
@@ -869,7 +870,6 @@
         appendTranscript("assistant", event.delta);
         eva.lastOutputAt = Date.now();
         bargeOnAssistantText(event.delta);
-        eva.inputBuf = ""; // she answers: the user's turn is over
         eva.thinking = false;
         touchActivity();
         break;
@@ -1328,13 +1328,13 @@
 
   // note: what she overheard during the pause (a promise) — silent context, never waited for.
   function askWoken(text, note) {
-    if (VOICE_REQUEST_RE.test(text)) requestVoiceChange(text);
-    else askBackend(text);
+    askBackend(text);
     Promise.resolve(note).then((n) => { if (n) thinking(n); });
   }
 
   function wakeEva(rest, heard = "") {
     if (eva.mode !== "waiting") return;
+    if (songs.playing) stopSong(); // she speaks again: the song ends
     clearTimeout(eva.pauseTimer);
     const note = overheardNote(flushOverheard((heard || "") + " " + (rest || ""))); // a promise: never delays the wake
     if (rest) addLine("user", callName + ", скажи, " + rest);
@@ -1428,12 +1428,6 @@
             bargeConfirm("ack");
             return;
           }
-          // Voice change: only the recogniser's best guess (k = 0), and not while Єва is talking —
-          // this recogniser has no echo cancellation; GPT-Live's own transcript covers that case.
-          if (eva.mode === "active" && result.isFinal && k === 0 && !barge.audible && VOICE_REQUEST_RE.test(text)) {
-            requestVoiceChange(text);
-            return;
-          }
           // ?debug=1: what the browser heard during the pause — shows why a wake phrase was missed.
           if (DEBUG && eva.mode === "waiting" && result.isFinal) addLine("system", "браузер почув: «" + text.trim() + "»");
           // Wake on the final text only: it carries the whole request after «Єва, скажи».
@@ -1506,8 +1500,7 @@
     await start(paused ? { paused: true, ready: eva.ready } : opts);
   }
 
-  // The server closed the call: after change_voice (asked by voice) to restart it in the new
-  // voice — otherwise it really ended.
+  // The server closed the call: to restart it in a new voice — otherwise it really ended.
   async function onSessionClosed(text = "Розмову завершено", state = "") {
     if (eva.mode === "switching" || eva.mode === "off" || eva.mode === "connecting") return;
     const wasPaused = eva.mode === "waiting";
@@ -1569,9 +1562,10 @@
     showVoiceVariant(picked);
   }
 
-  // «Голос»: one tab may hold several characters (Степан: безпечний / старий), each with a new (own) and an old (preset)
+  // «Голос»: one tab may hold several characters (Степан: безпечний / звичайний / небезпечний), each with a new (own) and an old (preset)
   // voice when the server has an own one for it (own_voice). Options are "id|own" or "id|preset".
-  const variantOf = (id) => (store.get("va-voice-variant-" + id) === "preset" ? "preset" : "own");
+  // The old preset voice is not offered any more: every character with an own voice speaks it.
+  const variantOf = () => "own";
   const groupOf = (x) => x.group || x.id;
   const groupMembers = (x) => voices.filter((m) => groupOf(m) === groupOf(x));
   function voiceChoices(picked) {
@@ -1580,8 +1574,7 @@
     for (const m of members) {
       const name = members.length > 1 ? (m.variant_label || m.label) : "";
       if (m.own_voice) {
-        out.push([m.id + "|own", name ? name + " — створений голос (новий)" : "Створений голос (новий)"]);
-        out.push([m.id + "|preset", name ? name + " — старий голос (пресет)" : "Старий голос (пресет)"]);
+        out.push([m.id + "|own", (name || "Створений голос") + " (новий голос)"]);
       } else if (members.length > 1) {
         out.push([m.id + "|preset", name]);
       }
@@ -1600,7 +1593,7 @@
     // A prompt-generated voice is not in the speech endpoint, so it has no sample: only the old one does.
     $("voicePreview").disabled = !voices.length || (has && own);
     $("voiceVariantInfo").textContent = has && own
-      ? "Новий голос звучить лише в розмові — зразка для нього немає. Старий — пресет, його можна прослухати."
+      ? "Створений голос звучить лише в розмові — зразка для нього немає."
       : "";
   }
 
@@ -1624,7 +1617,7 @@
     const target = voices.find((x) => x.id === id);
     if (!target) return;
     const variant = kind === "preset" ? "preset" : "own";
-    if (id !== voice) { // another character of the same tab (Степан: безпечний ↔ старий)
+    if (id !== voice) { // another character of the same tab (Степан: безпечний / звичайний / небезпечний)
       if (target.own_voice) store.set("va-voice-variant-" + id, variant);
       $("voice").value = id;
       stopPreview();
@@ -1643,7 +1636,7 @@
     });
   }
 
-  const CHARACTERS = ["meridian", "blunt", "blunt_rough", "lesia", "kit"]; // Тарас, Степан (безпечний, старий), Леся, Кішка
+  const CHARACTERS = ["meridian", "blunt", "blunt_rough", "blunt_unsafe", "lesia", "kit"]; // Тарас, Степан (безпечний, звичайний, небезпечний), Леся, Кішка
 
   async function loadVoices() {
     try {
@@ -2031,40 +2024,148 @@
     audio.play().catch(stopPreview);
   }
 
-  // «зміни голос …» in the Live transcript too (browsers without a recogniser, or it missed it):
-  // once the user pauses, like voice/options.py on the server — which now waits for the page.
-  function checkVoiceRequest(delta) {
-    eva.inputBuf = (eva.inputBuf + delta).slice(-300);
-    clearTimeout(eva.voiceCheckTimer);
-    if (!VOICE_REQUEST_RE.test(eva.inputBuf)) return;
-    eva.voiceCheckTimer = setTimeout(() => {
-      const text = eva.inputBuf;
-      eva.inputBuf = "";
-      if (eva.mode === "active") requestVoiceChange(text);
+  // ── Музика ──
+  // Songs are shared (the server keeps them): one added on a laptop is there on every phone. They play by the button or by «увімкни музику»
+  // (the picked song only: a song is chosen by hand, never by voice). She must not speak over a song: it
+  // pauses her and turns the mic off — so she hears nothing of it — and both come back when it stops.
+  // The list is the server's (server/songs.py): what one device uploads, every device and everyone sees.
+  const SONG_MIME = { mp3: "audio/mpeg", m4a: "audio/mp4", aac: "audio/aac", wav: "audio/wav", ogg: "audio/ogg",
+    opus: "audio/ogg", flac: "audio/flac" };
+  const SONG_MAX_MB = 25;
+  const songInfoText = $("songInfo").textContent;
+  const songNote = (text) => { $("songInfo").textContent = text || songInfoText; };
+
+  async function loadSongs() {
+    try {
+      const res = await fetch(BACKEND + "/api/songs");
+      if (!res.ok) throw new Error(String(res.status));
+      songs.list = (await res.json()).songs;
+    } catch {
+      if (songs.list.length) return; // offline for a moment: the list stays
+      songNote("Музика зараз недоступна — сервер не відповідає.");
+      showSongs();
+      return;
+    }
+    if (!songs.list.some((x) => x.id === songs.current)) songs.current = songs.list.length ? songs.list[0].id : "";
+    if (songs.playing && !songs.list.some((x) => x.id === songs.loadedId)) stopSong(); // deleted from another device
+    showSongs();
+  }
+
+  function showSongs() {
+    const has = songs.list.length > 0;
+    $("songSelect").replaceChildren(...(has ? songs.list.map((x) => new Option(x.name, x.id)) : [new Option("Пісень ще немає", "")]));
+    $("songSelect").value = songs.current;
+    $("songSelect").disabled = !has;
+    $("songPlay").disabled = !has;
+    $("songDelete").disabled = !has;
+    $("songPlay").textContent = songs.playing ? "■ Зупинити" : "▶ Увімкнути";
+  }
+
+  async function addSongs(files) {
+    let last = "";
+    for (const file of files) {
+      const ext = (file.name.split(".").pop() || "").toLowerCase();
+      const type = file.type.startsWith("audio/") ? file.type : SONG_MIME[ext];
+      if (!type) { addLine("system", "«" + file.name + "» — не аудіофайл, пропущено."); continue; }
+      if (file.size > SONG_MAX_MB * 1024 * 1024) { addLine("system", "«" + file.name + "» завелика: найбільше " + SONG_MAX_MB + " МБ."); continue; }
+      songNote("Завантажую «" + file.name + "»…");
+      try {
+        const res = await fetch(BACKEND + "/api/songs?name=" + encodeURIComponent(file.name.replace(/\.[^.]+$/, "")),
+          { method: "POST", headers: { "Content-Type": type }, body: file });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || "помилка " + res.status);
+        }
+        last = (await res.json()).id;
+      } catch (e) { addLine("system", "Не вдалося завантажити «" + file.name + "»: " + e.message); }
+    }
+    songNote();
+    if (last) songs.current = last;
+    store.set("va-song", songs.current);
+    await loadSongs();
+  }
+
+  async function deleteSong() {
+    const song = songs.list.find((x) => x.id === songs.current);
+    if (!song || !confirm("Видалити «" + song.name + "»? Вона зникне для всіх.")) return;
+    if (songs.playing && songs.loadedId === song.id) stopSong();
+    if (songs.loadedId === song.id) { songs.audio.removeAttribute("src"); songs.loadedId = ""; }
+    try { await fetch(BACKEND + "/api/songs/" + song.id, { method: "DELETE" }); } catch { /* stays in the list */ }
+    songs.current = "";
+    await loadSongs();
+    store.set("va-song", songs.current);
+  }
+
+  function playSong() {
+    const song = songs.list.find((x) => x.id === songs.current);
+    if (!song) { addLine("system", "Спершу додайте пісню в панелі «Музика»."); return; }
+    if (songs.playing) return;
+    if (eva.mode === "connecting" || eva.mode === "switching") { addLine("system", "Зачекайте, поки розмова підключиться, і вмикайте пісню."); return; }
+    if (eva.mode === "active") pauseEva(); // she goes silent first
+    if (eva.mode !== "off" && !micMuted) { songs.mutedMic = true; setMicMuted(true); }
+    const a = songs.audio;
+    if (songs.loadedId !== song.id) {
+      a.src = BACKEND + "/api/songs/" + song.id + "/audio";
+      songs.loadedId = song.id;
+    }
+    a.volume = IOS ? 1 : volume;
+    if (speakerId && a.setSinkId) a.setSinkId(speakerId).catch(() => {});
+    songs.playing = true;
+    showSongs();
+    if (eva.mode !== "off") showState();
+    a.play().catch(() => {
+      endSong();
+      addLine("system", "Браузер не дозволив увімкнути пісню — натисніть «Увімкнути» ще раз.");
+    });
+  }
+
+  function stopSong() {
+    songs.audio.pause();
+    endSong();
+  }
+
+  // The song is over (or stopped): the mic comes back, she stays paused until «Продовжити» / her wake phrase.
+  function endSong() {
+    if (!songs.playing) return;
+    songs.playing = false;
+    if (songs.mutedMic) {
+      songs.mutedMic = false;
+      if (micMuted && eva.mode !== "off") setMicMuted(false);
+    }
+    showSongs();
+    if (eva.mode !== "off") showState();
+  }
+
+  // «Увімкни музику» in the Live transcript: plays the picked song once the user pauses.
+  function checkMusicRequest(delta) {
+    songs.buf = (songs.buf + delta).slice(-200);
+    clearTimeout(songs.timer);
+    if (!MUSIC_REQUEST_RE.test(songs.buf)) return;
+    songs.timer = setTimeout(() => {
+      songs.buf = "";
+      if (eva.mode === "active") playSong();
     }, 900);
   }
 
-  // Heard «зміни голос …» ourselves: the page switches without a gap; the server's own transcript
-  // check is only a fallback (it waits longer and dedups with this).
-  async function requestVoiceChange(text) {
-    if (eva.voiceRequestBusy) return;
-    eva.voiceRequestBusy = true;
-    try {
-      const res = await fetch(BACKEND + "/api/voice-request", { method: "POST", headers: headers(), body: JSON.stringify({ text }) });
-      const data = res.ok ? await res.json() : null;
-      if (data && data.switched && eva.mode === "active" && voices.some((x) => x.id === data.voice)) {
-        voice = data.voice;
-        store.set("va-voice", voice);
-        showVoice();
-        addLine("system", "Голос змінено на «" + voiceLabel(voice) + "» (почула: «" + text.trim().slice(0, 80) + "»).");
-        // The old call goes on for a few seconds: it must not answer the request meanwhile.
-        sendEvent({ type: "session.instructions.append", delegation_id: null, event_id: eventId("voice"),
-          content: "The app is changing your voice right now. Say nothing at all and do not delegate it — stay silent." });
-        switchVoiceFast(false, true);
-      }
-    } catch { /* offline: the server-side path may still switch */ } finally {
-      eva.voiceRequestBusy = false;
-    }
+  function initMusic() {
+    songs.audio.addEventListener("ended", () => { songs.audio.currentTime = 0; endSong(); });
+    songs.audio.addEventListener("error", () => {
+      if (!songs.playing) return;
+      endSong();
+      addLine("system", "Цю пісню не вдалося відтворити — формат не підтримується браузером.");
+    });
+    $("songFile").addEventListener("change", (e) => { addSongs([...e.target.files]); e.target.value = ""; });
+    $("songSelect").addEventListener("change", () => {
+      if (songs.playing) stopSong();
+      songs.current = $("songSelect").value;
+      store.set("va-song", songs.current);
+    });
+    $("songPlay").addEventListener("click", () => (songs.playing ? stopSong() : playSong()));
+    $("songDelete").addEventListener("click", deleteSong);
+    loadSongs();
+    // Another device may have added or removed songs: look again when the page comes back and every half minute.
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) loadSongs(); });
+    setInterval(() => { if (!document.hidden) loadSongs(); }, 30000);
   }
 
   async function newConversation() {
@@ -2531,6 +2632,7 @@
     $("talk").addEventListener("click", () => {
       if (eva.mode !== "off") { stop(); return; }
       if (noMicReason()) { showNoMic(); setStatus("Немає доступу до мікрофона", "err"); postDiag(true); return; }
+      if (songs.playing) stopSong(); // a new call is not started over a song
       meterReset(); // a new call counts from zero
       start(defaultStart()); // asks for the mic synchronously, while the tap still counts
       primeAudio(); // then, in the same tap, the audio the gate will use
@@ -2540,6 +2642,7 @@
     $("resume").addEventListener("click", () => { wakeEva(""); primeAudio(); }); // a closed call reopens here
     $("bgListen").addEventListener("change", toggleBgListen);
     showBgListen();
+    initMusic();
     $("voiceNow").addEventListener("change", toggleVoiceNow);
     showVoiceNow();
     $("newChat").addEventListener("click", newConversation);
@@ -2563,6 +2666,7 @@
     $("volume").addEventListener("input", (e) => {
       volume = Math.min(1, Math.max(0, Number(e.target.value) / 100));
       store.set("va-volume", String(volume));
+      if (!IOS) songs.audio.volume = volume;
       showVolume();
       setRemoteVolume(bargeLevel());
       if (preview) preview.volume = volume;

@@ -181,7 +181,7 @@ def test_keeps_itself_awake_only_when_deployed(monkeypatch):
 def test_voice_picker_lists_live_voices_and_saves_choice(client):
     data = client.get("/api/voices").json()
     ids = [v["id"] for v in data["voices"]]
-    assert {"willow", "bossa", "marin", "lina", "meridian", "ripple", "blunt", "blunt_rough", "lesia", "kit"} == set(ids)
+    assert {"willow", "bossa", "marin", "lina", "meridian", "ripple", "blunt", "blunt_rough", "blunt_unsafe", "lesia", "kit"} == set(ids)
     assert data["default"] == "willow"  # Єва; OPENAI_LIVE_VOICE=gleam is no character any more
     assert any(v["feminine"] for v in data["voices"]) and not all(v["feminine"] for v in data["voices"])
     assert all(v["label"] and v["description"] for v in data["voices"])
@@ -196,15 +196,6 @@ def test_voice_picker_lists_live_voices_and_saves_choice(client):
     assert config["audio"]["output"]["voice"] == "willow"
     assert "Your character — Єва" in config["instructions"] and "Your name is Єва" in config["instructions"]
     assert "feminine grammatical gender" in config["instructions"]
-
-
-def test_voice_tool_accepts_only_picker_voices():
-    user = web.users.get(BOB)
-    ctx = ToolExecutionContext(session_id="s")
-    bad = asyncio.run(user.executor.execute("change_voice", {"voice": "echo"}, ctx))
-    assert not bad.ok and user.voice is None
-    ok = asyncio.run(user.executor.execute("change_voice", {"voice": "bossa"}, ctx))
-    assert ok.ok and user.voice == "bossa"
 
 
 _OWN_VOICES = {
@@ -287,8 +278,6 @@ def test_own_voice_is_accepted_by_the_desktop_change_voice():
 def test_tolik_is_a_character_on_cedar(client):
     """Степан, the courtyard hooligan: Кедр's voice — apart in the picker, only on request, and never at the
     concierge's door."""
-    from voice.options import voice_request_target as target
-
     tolik = next(v for v in client.get("/api/voices").json()["voices"] if v["id"] == "blunt")
     assert tolik["special"] and tolik["sample"] == "cedar" and tolik["label"] == "Степан"
     user = web.users.get("blunt-0123456789abcdef")
@@ -317,15 +306,6 @@ def test_tolik_is_a_character_on_cedar(client):
     plain = web._session_config(web.users.get("blunt-plain-0123456789a"))
     assert "з тобою от балакаю" in plain["instructions"]  # Єва, the default: a warm one keeps v5 as it is
     assert "You are Степан" not in plain["instructions"] and "Степан" not in plain["delegation"]["responses"]["instructions"]
-
-    assert target("зміни голос на Степана", "willow") == "blunt" and target("зміни голос на Толіка", "willow") == "blunt" and target("зміни голос на хуліган", "willow") == "blunt"
-    for current in ("willow", "meridian", "ripple"):  # never by «чоловічий» / «інший»
-        assert target("зміни голос на чоловічий", current) != "blunt"
-        assert target("зміни голос на інший", current) != "blunt"
-    other = web.users.get("blunt-tool-0123456789ab")
-    ok = asyncio.run(other.executor.execute("change_voice", {"voice": "blunt"},
-                                            ToolExecutionContext(session_id="s", user_utterances=["постав Степана"])))
-    assert ok.ok and other.voice == "blunt"
 
 
 def test_each_character_answers_to_its_own_name(client):
@@ -384,44 +364,6 @@ def test_blunt_prompt_takes_the_users_additions(monkeypatch):
     assert "Кажи «братан»" in blunt_prompt.backend_note() and blunt_prompt.backend_note().endswith("\n")
 
 
-def test_voice_change_keeps_the_conversation(client):
-    """Conversation → voice change by voice → the new session starts with everything said before."""
-    from server.live_bridge import SidebandToolBridge
-
-    user = web.users.get("carol-browser-0123456789")
-    bridge = SidebandToolBridge(
-        client=None, session_id="s1", executor=user.executor, conversation=user.conversation
-    )
-    user.bridges.add(bridge)
-
-    async def talk():
-        for etype, delta in [
-            ("session.input_transcript.delta", "Мене звати Остап, "),
-            ("session.input_transcript.delta", "я п'ю каву без цукру."),
-            ("session.output_transcript.delta", "Приємно, Остапе! Запам'ятала."),
-            ("session.input_transcript.delta", "Зміни голос на чоловічий."),
-        ]:
-            await bridge._handle_event({"type": etype, "delta": delta})
-
-    asyncio.run(talk())
-    result = asyncio.run(
-        user.executor.execute("change_voice", {"voice": "meridian"}, ToolExecutionContext(session_id="s1"))
-    )
-    assert result.ok and user.voice == "meridian"
-    assert bridge.restart_for_voice  # the page reconnects with the new voice…
-    assert client.get("/api/me", headers={"X-Client-Id": "carol-browser-0123456789"}).json()["reconnect"] is True
-
-    config = web._session_config(user)  # …and the new session gets the whole conversation
-    assert config["audio"]["output"]["voice"] == "meridian"
-    texts = [(item["role"], item["content"][0]["text"]) for item in config["input"]]
-    assert texts == [
-        ("user", "Мене звати Остап, я п'ю каву без цукру."),
-        ("assistant", "Приємно, Остапе! Запам'ятала."),
-        ("user", "Зміни голос на чоловічий."),
-    ]
-    assert "you are always Єва" in config["instructions"]
-
-
 def test_speed_and_style_are_saved_and_returned_for_the_page(client):
     """The page sends the returned instruction itself once Єва is quiet; the server only stores."""
     user = web.users.get("dave-browser-0123456789a")
@@ -449,123 +391,6 @@ def test_new_conversation_clears_history(client):
     user.conversation.add("user", "секрет")
     assert client.delete("/api/conversation", headers=headers).json()["ok"]
     assert len(user.conversation) == 0 and "input" not in web._session_config(user)
-
-
-def test_voice_change_closes_the_call_without_a_spoken_confirmation():
-    """change_voice: no «перемикаю…» — the old session is closed, the new voice carries on."""
-    from server.live_bridge import SidebandToolBridge
-
-    user = web.users.get("frank-browser-0123456789")
-    sent = []
-
-    class Conn:
-        class session:
-            @staticmethod
-            async def close():
-                sent.append("close")
-
-        class response:
-            @staticmethod
-            async def create(**kw):
-                sent.append("response.create")
-
-            class item:
-                @staticmethod
-                async def create(**kw):
-                    sent.append("item.create")
-
-    bridge = SidebandToolBridge(client=None, session_id="s2", executor=user.executor)
-    bridge._connection = Conn()
-    user.bridges.add(bridge)
-    asyncio.run(
-        bridge._execute_and_continue(
-            name="change_voice", arguments={"voice": "ripple"}, call_id="c1", delegation_id=None, key=""
-        )
-    )
-    assert user.voice == "ripple" and user.reconnect_pending
-    assert sent == ["close"]  # no tool output / response.create → she says nothing in the old voice
-    user.bridges.clear()
-
-
-def test_voice_request_detection_for_the_nudge():
-    from voice.options import VOICE_REQUEST_RE as voice_request
-
-    for text in ["Єва, зміни голос на чоловічий", "постав інший голос", "поміняй, будь ласка, голос",
-                 "давай голос на жіночий", "Голос на спокійніший"]:
-        assert voice_request.search(text), text
-    for text in ["голос у тебе гарний", "зміни зустріч на завтра", "зроби нагадування про голосування"]:
-        assert not voice_request.search(text), text
-
-
-def test_voice_request_picks_the_voice():
-    from voice.options import voice_request_target as target
-
-    assert target("Єва, зміни голос на чоловічий", "willow") == "meridian"  # Тарас first
-    assert target("зміни голос на чоловічий", "meridian") == "ripple"  # already a man: the next one
-    assert target("постав жіночий голос", "ripple") == "willow"
-    assert target("зміни голос на інший", "willow") == "bossa"
-    assert target("зроби голос спокійніший", "bossa") == "willow"
-    assert target("зроби голос спокійніший", "ripple") == "meridian"
-    assert target("постав голос Мілани", "willow") == "bossa"
-    assert target("переключи голос на Степана", "willow") == "blunt"
-    assert target("зміни голос на Бабу Галю", "willow") == "marin"
-    assert target("зміни голос на Ліну", "willow") == "lina"
-    assert target("зміни голос на Лесю", "willow") == "lesia"
-    assert target("зміни голос на кота", "willow") == "kit"
-    assert target("зміни голос на кішку", "willow") == "kit" and target("зміни голос на робокішку", "willow") == "lesia"
-    assert all(target("постав жіночий голос", c) != "lesia" for c in ("willow", "bossa", "marin", "lina"))
-    assert target("що в мене завтра?", "willow") is None
-    assert target("Єва, змини голос на чоловічий", "willow") == "meridian"  # STT spelling
-    assert target("Єва, зміни голос", "willow") == "bossa"  # bare: just another one
-    assert target("Єва, змини голос на Нагадай, як мене звати", "willow") is None  # cut off: unclear
-
-
-def test_bridge_switches_voice_from_the_transcript(monkeypatch):
-    """The model said only «Секунду»: the server switches the voice from what the user said."""
-    import server.live_bridge as bridge_mod
-    from server.live_bridge import SidebandToolBridge
-
-    monkeypatch.setattr(bridge_mod, "_UTTERANCE_PAUSE_S", 0.01)
-    monkeypatch.setattr(bridge_mod, "_PAGE_FIRST_S", 0)
-    user = web.users.get("gina-browser-0123456789a")
-    user.voice = "gleam"
-    closed = []
-
-    class Conn:
-        class session:
-            @staticmethod
-            async def close():
-                closed.append(True)
-
-    bridge = SidebandToolBridge(
-        client=None, session_id="s3", executor=user.executor, on_voice_request=user.switch_voice_by_request
-    )
-    bridge._connection = Conn()
-
-    async def talk():
-        for delta in ["Єва, зміни голос на ", "чоловічий."]:
-            await bridge._handle_event({"type": "session.input_transcript.delta", "delta": delta})
-        await asyncio.sleep(0.1)
-
-    asyncio.run(talk())
-    assert user.voice == "meridian" and user.reconnect_pending and closed == [True]
-
-
-def test_voice_request_endpoint_and_dedup(client):
-    headers = {"X-Client-Id": "hank-browser-0123456789a"}
-    user = web.users.get("hank-browser-0123456789a")
-    user.voice = "gleam"
-    first = client.post("/api/voice-request", json={"text": "Єва, зміни голос на чоловічий"}, headers=headers).json()
-    assert first == {"switched": True, "voice": "meridian"}
-    # the same request arriving again (Live transcript / the model): no second switch
-    again = client.post("/api/voice-request", json={"text": "Єва, зміни голос на чоловічий"}, headers=headers).json()
-    assert again == {"switched": False, "voice": "meridian"}
-    result = asyncio.run(
-        user.executor.execute("change_voice", {"voice": "ripple"}, ToolExecutionContext(session_id="s"))
-    )
-    assert result.ok and user.voice == "meridian"
-    other = client.post("/api/voice-request", json={"text": "котра година?"}, headers=headers).json()
-    assert other["switched"] is False
 
 
 def test_speed_change_waits_until_she_finishes_speaking(monkeypatch):
@@ -601,19 +426,6 @@ def test_speed_change_waits_until_she_finishes_speaking(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_model_cannot_change_the_voice_nobody_asked_for():
-    """Prod: «Розкажи щось» → the model called change_voice on its own and the voice switched."""
-    user = web.users.get("voice-guard-0123456789")
-    user.voice, user.voice_switched_at = "gleam", 0.0
-    unasked = ToolExecutionContext(session_id="s", user_utterances=["Як твої справи", "Розкажи щось"])
-    refused = asyncio.run(user.executor.execute("change_voice", {"voice": "bossa"}, unasked))
-    assert not refused.ok and user.voice == "gleam" and not user.reconnect_pending
-    asked = ToolExecutionContext(session_id="s", user_utterances=["Розкажи щось", "Зроби чоловічий голос"])
-    done = asyncio.run(user.executor.execute("change_voice", {"voice": "meridian"}, asked))
-    assert done.ok and user.voice == "meridian" and user.reconnect_pending
-    assert "попросила модель" in user.voice_switch_note
-
-
 def test_the_language_changes_only_when_asked():
     """Prod: «Ну так, расскажи, как ИИ работает» → change_language ru by the model; «Українською говори» never
     switched it back, and every next call opened with «speak exclusively in Russian»."""
@@ -627,28 +439,6 @@ def test_the_language_changes_only_when_asked():
     back = asyncio.run(user.executor.execute("change_language", {"language": "uk"}, said("ok")))  # back home: always
     assert back.ok and user.language == "uk"
     assert asyncio.run(user.executor.execute("change_language", {"language": "ru"}, said("говори по-русски"))).ok
-
-
-@pytest.mark.parametrize(
-    "utterances, expected",
-    [
-        (None, True),
-        (["Розкажи щось"], False),
-        (["Як справи", "Розкажи щось цікаве"], False),
-        (["Давай іншим голосом"], True),
-        (["Хочу Мілану"], True),
-        (["Степан, розкажи щось"], False),  # they call each character by name: not a wish to switch
-        (["Мілано, як справи?"], False),
-        (["Поклич Тараса"], True),
-        (["зроби чоловічий"], True),
-        (["говори спокійніше"], True),
-    ],
-)
-def test_asked_for_voice_change(utterances, expected):
-    from voice.options import asked_for_voice_change
-
-    assert asked_for_voice_change(utterances) is expected
-
 
 
 def test_wake_request_goes_into_the_new_call_as_the_users_message(monkeypatch):
@@ -801,12 +591,13 @@ def test_concierge_mode_and_confirm_guest(client):
     assert client.get("/api/me", headers={"X-Client-Id": "conc-browser-0123456789ab"}).json()["guest"] is None
 
 
-def test_two_toliks_safe_and_rough(client):
-    """Безпечний Степан (blunt, cedar): no swearing, softer with children. Звичайний (blunt_rough, ash): the old one."""
+def test_three_toliks_safe_rough_and_unsafe(client):
+    """Безпечний Степан (blunt, cedar): no swearing, softer with children. Степан (blunt_rough, ash): light swearing.
+    Небезпечний (blunt_unsafe, ash): mat. All three speak the own voice when it is set."""
     voices = {v["id"]: v for v in client.get("/api/voices").json()["voices"]}
-    assert voices["blunt"]["label"] == voices["blunt_rough"]["label"] == "Степан"  # one tab, two variants
-    assert voices["blunt"]["group"] == voices["blunt_rough"]["group"] == "blunt"
-    assert voices["blunt"]["variant_label"] == "Безпечний Степан" and voices["blunt_rough"]["variant_label"] == "Старий Степан"
+    assert voices["blunt"]["label"] == voices["blunt_rough"]["label"] == voices["blunt_unsafe"]["label"] == "Степан"  # one tab
+    assert voices["blunt"]["group"] == voices["blunt_rough"]["group"] == voices["blunt_unsafe"]["group"] == "blunt"
+    assert [voices[k]["variant_label"] for k in ("blunt", "blunt_rough", "blunt_unsafe")] == ["Безпечний Степан", "Степан", "Небезпечний Степан"]
     assert voices["blunt"]["sample"] == "cedar" and voices["blunt_rough"]["sample"] == "ash"
     safe = web.users.get("tolik-safe-0123456789abc")
     safe.voice = "blunt"
@@ -819,9 +610,3 @@ def test_two_toliks_safe_and_rough(client):
     assert "You are Степан" in rough_cfg["instructions"] and "Your name is Степан" in rough_cfg["instructions"]
     assert "no swearing at all" in safe_cfg["delegation"]["responses"]["instructions"]
     assert "no swearing at all" not in rough_cfg["delegation"]["responses"]["instructions"]
-    from voice.options import voice_request_target as target
-    assert target("зміни голос на Степана", "willow") == "blunt"  # by default the safe one
-    assert target("зміни голос на грубого Степана", "willow") == "blunt_rough"
-    assert target("зміни голос на старого Степана", "willow") == "blunt_rough"
-    for current in ("willow", "meridian", "ripple"):  # never by «чоловічий» / «інший»
-        assert target("зміни голос на чоловічий", current) not in ("blunt", "blunt_rough")

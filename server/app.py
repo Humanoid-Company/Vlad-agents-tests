@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -40,7 +40,7 @@ from config import (
 )
 from prompts.backend_prompt import build_backend_prompt, local_today
 from prompts.live_prompt import build_concierge_prompt, build_live_prompt
-from server import checkins, conversations, knowledge, usage
+from server import checkins, conversations, knowledge, songs, usage
 from server.call_log import CallLogStore
 from server.db import StoreError
 from server.knowledge_import import KnowledgeImportError, make_openai_extract, make_openai_plan, parse_file
@@ -442,7 +442,6 @@ async def create_session(
         on_closed=lambda b: _call_closed(user, b),
         max_duration_s=MAX_SESSION_S,
         conversation=user.conversation,
-        on_voice_request=user.switch_voice_by_request,
         call_log=call_log,
         think_aloud="neutral" if user.concierge else "full",
     )
@@ -539,22 +538,61 @@ def set_voice(
     return {"voice": user.voice, "speed": user.speed, "style": user.style, "instruction": instruction}
 
 
-class VoiceRequestBody(BaseModel):
-    text: str
+# ── «Музика»: songs shared by everyone, on every device (server/songs.py, the panel on web/index.html) ──
+def _songs(call, *args):
+    try:
+        return call(*args)
+    except StoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@app.post("/api/voice-request")
-def voice_request(
-    body: VoiceRequestBody,
-    x_client_id: str | None = Header(default=None),
-) -> dict:
-    """«Єва, зміни голос на …» heard by the browser's recogniser — faster than the Live transcript.
-    The page restarts the call in the new voice when switched is true."""
-    user = _talker(x_client_id)
-    switched = user.switch_voice_by_request(body.text[:500])
-    if switched:
-        user.reconnect_pending = False  # the page reconnects itself
-    return {"switched": switched, "voice": user.voice}
+@app.get("/api/songs")
+def list_songs() -> dict:
+    return {"songs": _songs(songs.store.list)}
+
+
+@app.post("/api/songs")
+async def add_song(request: Request, name: str = "") -> dict:
+    """The audio file is the raw request body (no multipart); its name is the `name` query."""
+    mime = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if not mime.startswith("audio/"):
+        raise HTTPException(status_code=415, detail="Це не аудіофайл.")
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="Порожній файл.")
+    if len(data) > songs.MAX_SONG_BYTES:
+        raise HTTPException(status_code=413, detail=f"Файл завеликий: найбільше {songs.MAX_SONG_BYTES // 1024 // 1024} МБ.")
+    if await asyncio.to_thread(_songs, songs.store.count) >= songs.MAX_SONGS:
+        raise HTTPException(status_code=409, detail=f"Пісень уже {songs.MAX_SONGS} — видаліть зайві.")
+    return await asyncio.to_thread(_songs, songs.store.add, name, mime, data)
+
+
+@app.get("/api/songs/{song_id}/audio")
+def song_audio(song_id: str, range: str | None = Header(default=None)) -> Response:
+    """The file, with Range: Safari won't play audio from a server that ignores it."""
+    found = _songs(songs.store.get, song_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Пісню не знайдено.")
+    mime, data = found
+    size = len(data)
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": "public, max-age=86400"}
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", (range or "").strip())
+    if match and (match.group(1) or match.group(2)):
+        if match.group(1):
+            start = int(match.group(1))
+            end = min(int(match.group(2)), size - 1) if match.group(2) else size - 1
+        else:  # «bytes=-500»: the last 500
+            start, end = max(0, size - int(match.group(2))), size - 1
+        if start >= size or start > end:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        return Response(data[start:end + 1], status_code=206, media_type=mime, headers=headers)
+    return Response(data, media_type=mime, headers=headers)
+
+
+@app.delete("/api/songs/{song_id}")
+def delete_song(song_id: str) -> dict:
+    return {"ok": _songs(songs.store.delete, song_id)}
 
 
 class OverheardBody(BaseModel):

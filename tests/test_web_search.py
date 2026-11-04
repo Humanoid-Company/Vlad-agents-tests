@@ -194,7 +194,7 @@ def test_web_and_desktop_register_web_search_off_the_event_loop():
     assert user.executor.is_offloaded("web_search")
     desktop = Assistant.__new__(Assistant)
     desktop._web_search_limiter = WebSearchRateLimiter(max_per_turn=3)
-    for name in ("_live_set_name", "_live_change_voice", "_live_set_voice_style", "_live_change_language",
+    for name in ("_live_set_name", "_live_set_voice_style", "_live_change_language",
                  "_live_end_conversation"):
         setattr(desktop, name, lambda args, ctx: None)
     assert Assistant._build_tool_executor(desktop).is_offloaded("web_search")
