@@ -91,11 +91,18 @@ _SCHEMA = {
 KnowledgeError = StoreError
 
 
+def sees(character: str | None, set_character: str) -> bool:
+    """Does `character` know a set made for `set_character`? A set for nobody in particular ("") is for all;
+    character=None means no character is asked for (the team's own tools, tests): every set."""
+    return character is None or not set_character or set_character == character
+
+
 @dataclass
 class Record:
     set_name: str
     title: str
     fields: dict[str, str]
+    character: str = ""  # whose set it is: "" = everyone's
 
     def line(self) -> str:
         facts = "; ".join(f"{k}: {v}" for k, v in self.fields.items())
@@ -151,8 +158,11 @@ class KnowledgeStore(SqlStore):
         ("kb_sets", "kind", {"postgres": "TEXT NOT NULL DEFAULT 'records'", "sqlite": "TEXT NOT NULL DEFAULT 'records'"}),
         ("kb_sets", "body", {"postgres": "TEXT NOT NULL DEFAULT ''", "sqlite": "TEXT NOT NULL DEFAULT ''"}),
         ("kb_sets", "pinned", {"postgres": "BOOLEAN NOT NULL DEFAULT FALSE", "sqlite": "INTEGER NOT NULL DEFAULT 0"}),
+        # Who the set is for: a character's id (the picker's tab); "" = everyone. Sets from before are everyone's.
+        ("kb_sets", "character", {"postgres": "TEXT NOT NULL DEFAULT ''", "sqlite": "TEXT NOT NULL DEFAULT ''"}),
     ]
-    _SET_COLS = "id, name, note, source, enabled, item_count, created_at, owner_id, owner_name, kind, body, pinned"
+    _SET_COLS = ("id, name, note, source, enabled, item_count, created_at, owner_id, owner_name, kind, body, pinned, "
+                 "character")
     UNAVAILABLE = "База знань недоступна"
     FAILED = "Помилка бази знань"
 
@@ -162,7 +172,7 @@ class KnowledgeStore(SqlStore):
         self._sets_summary: list[dict[str, Any]] = []
         self._texts: list[Record] = []
         self._looked_up: list[Record] = []
-        self._pinned = ""
+        self._pinned_parts: list[tuple[str, str]] = []
         self._snapshot_at = 0.0
 
     def _changed(self) -> None:
@@ -187,7 +197,7 @@ class KnowledgeStore(SqlStore):
         return {"id": int(r[0]), "name": r[1], "note": r[2], "source": r[3], "enabled": bool(r[4]),
                 "count": int(r[5]), "created_at": float(r[6]),
                 "owner_id": int(r[7]) if r[7] is not None else None, "owner_name": r[8] or "",
-                "kind": kind, "body": body, "chars": len(body), "pinned": bool(r[11])}
+                "kind": kind, "body": body, "chars": len(body), "pinned": bool(r[11]), "character": r[12] or ""}
 
     def pinned_chars(self) -> int:
         """How much of «Завжди пам'ятати» goes into every call now (the page shows it against the limit)."""
@@ -210,8 +220,9 @@ class KnowledgeStore(SqlStore):
 
     def create_set(self, name: str, items: list[dict[str, Any]], *, note: str = "", source: str = "",
                    owner_id: int | None = None, owner_name: str = "", kind: str = "records", body: str = "",
-                   pinned: bool = False) -> dict[str, Any]:
-        """A set of records (items), or with kind="text" one text under the name (body; items are ignored)."""
+                   pinned: bool = False, character: str = "") -> dict[str, Any]:
+        """A set of records (items), or with kind="text" one text under the name (body; items are ignored).
+        `character`: the one it is for ("" = every character knows it)."""
         name = " ".join(name.split())[:MAX_SET_NAME_CHARS]
         if kind not in KINDS:
             raise KnowledgeError("Невідомий тип розділу.")
@@ -228,9 +239,9 @@ class KnowledgeStore(SqlStore):
         with self._conn() as conn:
             row = conn.execute(
                 self._q("INSERT INTO kb_sets (name, note, source, enabled, item_count, created_at, owner_id, owner_name, "
-                        "kind, body, pinned) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id"),
+                        "kind, body, pinned, character) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id"),
                 (name, note.strip()[:MAX_NOTE_CHARS], source.strip()[:200], True, len(items), time.time(),
-                 owner_id, " ".join(owner_name.split())[:120], kind, body, bool(pinned)),
+                 owner_id, " ".join(owner_name.split())[:120], kind, body, bool(pinned), character.strip().lower()[:40]),
             ).fetchone()
             set_id = int(row[0])
             rows = [(set_id, i, it["title"], json.dumps(it["fields"], ensure_ascii=False)) for i, it in enumerate(items)]
@@ -249,7 +260,7 @@ class KnowledgeStore(SqlStore):
 
     def update_set(self, set_id: int, *, enabled: bool | None = None, name: str | None = None,
                    note: str | None = None, pinned: bool | None = None,
-                   body: str | None = None) -> dict[str, Any] | None:
+                   body: str | None = None, character: str | None = None) -> dict[str, Any] | None:
         """Switch a set on or off, pin it («Завжди пам'ятати»), rename it, change its note — or a text set's text."""
         current = self.get_set(set_id)
         if current is None:
@@ -268,6 +279,8 @@ class KnowledgeStore(SqlStore):
             changes.append(("name", new_name))
         if note is not None:
             changes.append(("note", note.strip()[:MAX_NOTE_CHARS]))
+        if character is not None:
+            changes.append(("character", character.strip().lower()[:40]))
         if body is not None:
             if current["kind"] != "text":
                 raise KnowledgeError("Текст змінюється лише в текстовому розділі.")
@@ -338,7 +351,7 @@ class KnowledgeStore(SqlStore):
             return
         with self._conn() as conn:
             sets = conn.execute(
-                self._q("SELECT id, name, note, item_count, kind, body, pinned FROM kb_sets WHERE enabled = %s "
+                self._q("SELECT id, name, note, item_count, kind, body, pinned, character FROM kb_sets WHERE enabled = %s "
                         "ORDER BY created_at, id"),
                 (True,),
             ).fetchall()
@@ -347,59 +360,68 @@ class KnowledgeStore(SqlStore):
                         "WHERE s.enabled = %s ORDER BY s.created_at, s.id, i.position"),
                 (True,),
             ).fetchall()
-        names = {int(s[0]): s[1] for s in sets}
-        records = [Record(names[int(sid)], title, json.loads(fields)) for sid, title, fields in rows if int(sid) in names]
+        names = {int(s[0]): (s[1], s[7] or "") for s in sets}
+        records = [Record(names[int(sid)][0], title, json.loads(fields), names[int(sid)][1])
+                   for sid, title, fields in rows if int(sid) in names]
         texts: list[Record] = []
-        pinned: list[str] = []
+        pinned: list[tuple[str, str]] = []  # (whose, its text)
         summary: list[dict[str, Any]] = []
-        for _set_id, name, note, count, kind, body, is_pinned in sets:
+        for _set_id, name, note, count, kind, body, is_pinned, character in sets:
+            character = character or ""
             own = [r for r in records if r.set_name == name]
             if kind == "text":
                 sections = text_sections(name, body or "")
+                for section in sections:
+                    section.character = character
                 if is_pinned:
                     # its own headings one level under the set's name
-                    pinned.append(f"## {name}\n" + re.sub(r"^(#{1,4})\s", r"#\1 ", (body or "").strip(), flags=re.M))
+                    pinned.append((character, f"## {name}\n"
+                                   + re.sub(r"^(#{1,4})\s", r"#\1 ", (body or "").strip(), flags=re.M)))
                 else:
                     texts.extend(sections)
                     summary.append({"name": name, "note": note, "count": len(sections), "kind": "text",
-                                    "titles": [r.title for r in sections][:25]})
+                                    "titles": [r.title for r in sections][:25], "character": character})
                 continue
             if is_pinned and not is_memory(name):
-                pinned.append(f"## {name}\n" + "\n".join(r.line() for r in own))
+                pinned.append((character, f"## {name}\n" + "\n".join(r.line() for r in own)))
                 continue
             summary.append({"name": name, "note": note, "count": int(count), "kind": "records",
-                            "titles": [r.title for r in own][:25]})
-        block = "\n\n".join(pinned)
-        if len(block) > PINNED_MAX_CHARS:
-            logger.warning("knowledge.pinned_too_long chars=%s max=%s", len(block), PINNED_MAX_CHARS)
-            block = block[:PINNED_MAX_CHARS].rsplit("\n", 1)[0] + "\n[…далі обрізано: забагато в «Завжди пам'ятати»]"
+                            "titles": [r.title for r in own][:25], "character": character})
         pinned_names = {s[1] for s in sets if s[6] and s[4] != "text" and not is_memory(s[1])}
         self._sets_summary, self._snapshot, self._texts = summary, records, texts
         self._looked_up = [r for r in records if r.set_name not in pinned_names]
-        self._pinned, self._snapshot_at = block, time.monotonic()
+        self._pinned_parts, self._snapshot_at = pinned, time.monotonic()
 
-    def enabled_records(self) -> tuple[list[dict[str, Any]], list[Record]]:
+    def enabled_records(self, character: str | None = None) -> tuple[list[dict[str, Any]], list[Record]]:
         """The enabled record sets (name, note, count, a few titles) and all their people, pinned or not — the
-        concierge's guest list. Text sets are not people: never in here."""
+        concierge's guest list (of the character at the door: a set made for another one is not its list).
+        Text sets are not people: never in here."""
         self._load()
-        return [s for s in self._sets_summary if s["kind"] == "records"], list(self._snapshot or [])
+        return ([s for s in self._sets_summary if s["kind"] == "records" and sees(character, s["character"])],
+                [r for r in self._snapshot or [] if sees(character, r.character)])
 
-    def pinned_block(self) -> str:
-        """«Завжди пам'ятати»: the pinned sets as one text («## назва» + its text or records), for the prompts."""
+    def pinned_block(self, character: str | None = None) -> str:
+        """«Завжди пам'ятати»: the pinned sets as one text («## назва» + its text or records), for the prompts —
+        the ones for everyone and for this character."""
         self._load()
-        return self._pinned
+        block = "\n\n".join(text for whose, text in self._pinned_parts if sees(character, whose))
+        if len(block) > PINNED_MAX_CHARS:
+            logger.warning("knowledge.pinned_too_long chars=%s max=%s", len(block), PINNED_MAX_CHARS)
+            block = block[:PINNED_MAX_CHARS].rsplit("\n", 1)[0] + "\n[…далі обрізано: забагато в «Завжди пам'ятати»]"
+        return block
 
     def lookup(self, query: str, set_name: str = "", *, with_memory: bool = True,
-               memory: str = MEMORY_SET) -> dict[str, Any]:
+               memory: str = MEMORY_SET, character: str | None = None) -> dict[str, Any]:
         """Records for the backend model: everything enabled while it fits, else the closest ones. Text sets
         come as their sections; pinned sets are left out (they are in the instructions already).
         A character sees only its own memory set (`memory`): what another wrote down is not its knowledge.
-        with_memory=False leaves out every written-down set (the concierge never shows them)."""
+        with_memory=False leaves out every written-down set (the concierge never shows them).
+        A set uploaded for one character is known to that character only (`character`)."""
         self._load()
         sets, records = self._sets_summary, [*self._looked_up, *self._texts]
         own = memory if with_memory else None
-        sets = [s for s in sets if not is_memory(s["name"]) or s["name"] == own]
-        records = [r for r in records if not is_memory(r.set_name) or r.set_name == own]
+        sets = [s for s in sets if (not is_memory(s["name"]) or s["name"] == own) and sees(character, s["character"])]
+        records = [r for r in records if (not is_memory(r.set_name) or r.set_name == own) and sees(character, r.character)]
         if set_name.strip():
             wanted = _best_set(set_name, [s["name"] for s in sets])
             if wanted:
@@ -558,12 +580,12 @@ PEOPLE_NOTE = (
 store = KnowledgeStore(os.getenv("DATABASE_URL", ""), os.getenv("KNOWLEDGE_SQLITE", "data/knowledge.db"))
 
 
-def pinned_note(*, backend: bool = False) -> str:
+def pinned_note(*, backend: bool = False, character: str | None = None) -> str:
     """«Завжди пам'ятати» for the instructions of a call: the voice (GPT-Live) keeps its rules in every reply
     and knows the basics without a lookup; the backend gets the same so what it writes keeps them too. Empty
     when nothing is pinned or the store is down (a call never fails for it)."""
     try:
-        block = store.pinned_block()
+        block = store.pinned_block(character)
     except StoreError:
         logger.warning("knowledge.pinned_unavailable")
         return ""

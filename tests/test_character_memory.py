@@ -94,3 +94,43 @@ def test_remember_tool_writes_into_the_characters_own_set():
     assert user.memory_set == knowledge.MEMORY_PREFIX + "Тарас"
     user.voice = "willow"
     assert user.memory_set == knowledge.MEMORY_SET
+
+
+# ── knowledge sets uploaded for one character ──
+def test_a_set_for_one_character_is_known_to_it_alone():
+    store = knowledge.store
+    store.create_set("Для всіх", [{"title": "Олег", "fields": {"хобі": "йога"}}])
+    store.create_set("Тарасові", [{"title": "Марія", "fields": {"хобі": "шахи"}}], character="meridian")
+    text = lambda who: store.lookup("хобі", character=who)["text"]  # noqa: E731
+    assert "Олег" in text("meridian") and "Марія" in text("meridian")
+    assert "Олег" in text("lesia") and "Марія" not in text("lesia")  # Леся was never told about Марія
+    assert "Марія" in text(None)  # the team's own view: everything
+    assert [s["name"] for s in store.lookup("хобі", character="kit")["sets"]] == ["Для всіх"]
+
+
+def test_pinned_text_for_one_character_goes_into_its_instructions_only():
+    store = knowledge.store
+    store.create_set("Правила", [], kind="text", body="Усім: чемно.", pinned=True)
+    store.create_set("Про Тараса", [], kind="text", body="Тарас — з Одеси.", pinned=True, character="meridian")
+    assert "Тарас — з Одеси" in store.pinned_block("meridian") and "Усім: чемно" in store.pinned_block("meridian")
+    assert "Тарас — з Одеси" not in store.pinned_block("lesia") and "Усім: чемно" in store.pinned_block("lesia")
+    assert "Про Тараса" not in knowledge.pinned_note(character="kit")
+    assert "Про Тараса" in knowledge.pinned_note(character="meridian")
+
+
+def test_concierge_list_follows_the_character_too():
+    knowledge.store.create_set("Гості Тараса", [{"title": "Іван"}], character="meridian")
+    assert [r.title for r in knowledge.store.enabled_records("meridian")[1]] == ["Іван"]
+    assert knowledge.store.enabled_records("lesia")[1] == []
+
+
+def test_the_page_picks_and_changes_the_character(client):
+    made = client.post("/api/knowledge", json={"name": "Секрет", "kind": "text", "body": "Він знає.", "character": "Meridian"}).json()
+    assert made["character"] == "meridian"
+    assert client.post(f"/api/knowledge/{made['id']}", json={"character": ""}).json()["character"] == ""
+    assert client.post(f"/api/knowledge/{made['id']}", json={"character": "lesia"}).json()["character"] == "lesia"
+    assert client.post("/api/knowledge", json={"name": "Х", "kind": "text", "body": "x", "character": "nobody"}).status_code == 400
+    assert [s["character"] for s in client.get("/api/knowledge").json()["sets"]] == ["lesia"]
+    # the three Степани are one character: the set is for the group
+    stepan = client.post("/api/knowledge", json={"name": "Двір", "kind": "text", "body": "Лавка.", "character": "blunt"}).json()
+    assert stepan["character"] == "blunt"

@@ -218,7 +218,7 @@ def _session_config(user: WebUser, *, concierge: bool = False) -> dict:
     if concierge:
         return _concierge_config(user, language, today, voice)
     # «Завжди пам'ятати» last: the team's rules for this event come after (and over) the general ones.
-    standing = knowledge.pinned_note()
+    standing = knowledge.pinned_note(character=user.character)
     config = {
         "model": OPENAI_LIVE_MODEL,
         "instructions": build_live_prompt(
@@ -241,7 +241,7 @@ def _session_config(user: WebUser, *, concierge: bool = False) -> dict:
             + knowledge.PEOPLE_NOTE
             + (VOICE_PERSONAS[voice].backend_note if voice in VOICE_PERSONAS else "")
             + (_PERSON_BACKEND_NOTE if voice in VOICE_PERSONAS and VOICE_PERSONAS[voice].is_person else "")
-            + knowledge.pinned_note(backend=True),
+            + knowledge.pinned_note(backend=True, character=user.character),
             tools=[*LIVE_BACKEND_TOOLS, LOOK_AT_CAMERA_TOOL, KNOWLEDGE_LOOKUP_TOOL, REMEMBER_PERSON_TOOL],
             parallel_tools=OPENAI_LIVE_PARALLEL_TOOLS,
             effort=OPENAI_LIVE_BACKEND_EFFORT,
@@ -269,13 +269,13 @@ def _concierge_config(user: WebUser, language: str, today: str, voice: str) -> d
         "instructions": build_concierge_prompt(language_name=language, today=today, voice=voice,
                                                check_question=user.check_question,
                                                old_voice=voice in user.old_voices)
-        + knowledge.pinned_note(),
+        + knowledge.pinned_note(character=user.character),
         "audio": {"output": {"voice": api_voice(voice, voice in user.old_voices)}},  # the voice only: a concierge never roasts guests
         "delegation": responses_delegation(
             model=OPENAI_LIVE_BACKEND_MODEL,
             instructions=build_backend_prompt(today=today, language_name=language)
             + knowledge.BACKEND_NOTE + knowledge.concierge_backend_note(user.check_question)
-            + knowledge.pinned_note(backend=True),
+            + knowledge.pinned_note(backend=True, character=user.character),
             tools=tools,
             parallel_tools=OPENAI_LIVE_PARALLEL_TOOLS,
             effort=OPENAI_LIVE_BACKEND_EFFORT,
@@ -894,6 +894,7 @@ class KnowledgeSetIn(BaseModel):
     kind: str = "records"
     body: str = ""
     pinned: bool = False  # «Завжди пам'ятати»: in the instructions of every call
+    character: str = ""  # a character's id: the set is known to it alone; "" = everyone
 
 
 class KnowledgeSetPatch(BaseModel):
@@ -902,6 +903,15 @@ class KnowledgeSetPatch(BaseModel):
     name: str | None = None
     note: str | None = None
     body: str | None = None  # a text set's new text
+    character: str | None = None  # whose set it is ("" = everyone)
+
+
+def _set_character(value: str) -> str:
+    """The character a set is for: one of the picker's ("" = everyone)."""
+    value = (value or "").strip().lower()
+    if value and value not in {p.group or p.id for p in VOICE_PERSONAS.values()}:
+        raise HTTPException(status_code=400, detail="Невідомий персонаж.")
+    return value
 
 
 @app.post("/api/knowledge/parse")
@@ -932,7 +942,7 @@ def knowledge_sets() -> dict:
 def knowledge_create(body: KnowledgeSetIn) -> dict:
     items = [item.model_dump() for item in body.items]
     created = _kb(knowledge.store.create_set, body.name, items, note=body.note, source=body.source,
-                  kind=body.kind, body=body.body, pinned=body.pinned)
+                  kind=body.kind, body=body.body, pinned=body.pinned, character=_set_character(body.character))
     return created
 
 
@@ -948,7 +958,8 @@ def knowledge_get(set_id: int) -> dict:
 def knowledge_update(set_id: int, body: KnowledgeSetPatch) -> dict:
     """Turn a set on or off for Єва («Єва знає»), pin it («Завжди пам'ятати»), rename it, change its note or text."""
     found = _kb(knowledge.store.update_set, set_id, enabled=body.enabled, name=body.name, note=body.note,
-                pinned=body.pinned, body=body.body)
+                pinned=body.pinned, body=body.body,
+                character=None if body.character is None else _set_character(body.character))
     if found is None:
         raise HTTPException(status_code=404, detail="Такого набору немає.")
     return found

@@ -375,7 +375,7 @@ def _build_executor(user: WebUser) -> ToolExecutor:
         query = str(args.get("query") or "").strip()[:300]
         try:
             found = knowledge.store.lookup(query, str(args.get("set") or ""), with_memory=not user.concierge,
-                                         memory=user.memory_set)
+                                         memory=user.memory_set, character=user.character)
         except knowledge.KnowledgeError as exc:
             return ToolResult(ok=False, status="error", message=f"{exc} Скажи, що зараз не можеш заглянути в записи команди.")
         logger.info("web.knowledge.lookup total=%s shown=%s", found["total"], found["shown"])
@@ -396,7 +396,8 @@ def _build_executor(user: WebUser) -> ToolExecutor:
 
     def _guest_records() -> list:
         """The guest list is what the team uploaded: what Єва wrote down herself never lets anyone in."""
-        return [r for r in knowledge.store.enabled_records()[1] if not knowledge.is_memory(r.set_name)]
+        return [r for r in knowledge.store.enabled_records(user.character)[1]
+                if not knowledge.is_memory(r.set_name)]
 
     def remember_person(args: dict, ctx: ToolExecutionContext) -> ToolResult:
         name = " ".join(str(args.get("name") or "").split())

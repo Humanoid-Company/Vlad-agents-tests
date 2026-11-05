@@ -430,7 +430,7 @@ def test_pinned_knowledge_is_in_every_call(store):
 
 
 def test_a_store_that_is_down_never_breaks_a_call(store, monkeypatch):
-    def down():
+    def down(*_args):
         raise knowledge.KnowledgeError("База знань недоступна")
 
     monkeypatch.setattr(store, "pinned_block", down)

@@ -349,3 +349,7 @@ form.card[hidden], [role="tabpanel"][hidden] { display: none; }
 .song-seek span { flex: 0 0 auto; min-width: 2.6em; font-variant-numeric: tabular-nums; }
 .song-seek span:last-child { text-align: right; }
 
+
+/* «Знання»: whose set it is */
+.set-who { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-weight: normal; }
+.set-who select { width: auto; flex: 0 1 auto; padding: 4px 8px; font-size: 0.85rem; }

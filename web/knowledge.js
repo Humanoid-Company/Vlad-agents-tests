@@ -11,6 +11,22 @@
     set(key, value) { try { localStorage.setItem(key, value); } catch { /* private mode */ } },
   };
   let draft = null; // { items, file } — the parsed file before it is saved
+  // The characters of the main page's picker (web/app.js CHARACTERS): a set can be made for one of them. The three
+  // Степани are one character (the group), so one entry.
+  const PICKER = ["meridian", "blunt", "blunt_rough", "blunt_unsafe", "lesia", "kit"];
+  let characters = []; // [{ id: group, label }]
+  const characterName = (id) => (characters.find((c) => c.id === id) || { label: id }).label;
+  async function loadCharacters() {
+    try {
+      const data = await api("/api/voices");
+      const seen = new Set();
+      characters = (data.voices || []).filter((v) => PICKER.includes(v.id))
+        .sort((a, b) => PICKER.indexOf(a.id) - PICKER.indexOf(b.id))
+        .filter((v) => !seen.has(v.group || v.id) && seen.add(v.group || v.id))
+        .map((v) => ({ id: v.group || v.id, label: v.label }));
+    } catch { characters = []; }
+    $("setCharacter").replaceChildren(new Option("Для всіх персонажів", ""), ...characters.map((c) => new Option(c.label, c.id)));
+  }
   const PREVIEW_MAX = 200; // records drawn in the preview; all of them are saved
   const opened = new Map(); // set id → its records, once «Переглянути» loaded them
 
@@ -131,12 +147,12 @@
     try {
       const saved = await api("/api/knowledge", {
         method: "POST",
-        body: JSON.stringify({ name, note: $("setNote").value.trim(), source: draft.file, items: draft.items }),
+        body: JSON.stringify({ name, note: $("setNote").value.trim(), source: draft.file, items: draft.items, character: $("setCharacter").value }),
       });
       cancel();
       $("setName").value = "";
       $("setNote").value = "";
-      status("Збережено «" + saved.name + "»: " + records(saved.count) + ". Єва знатиме їх з наступної розмови.", "ok");
+      status("Збережено «" + saved.name + "»: " + records(saved.count) + ". " + (saved.character ? characterName(saved.character) + " знатиме" : "Усі знатимуть") + " їх з наступної розмови.", "ok");
       await loadSets();
     } catch (err) {
       $("saveSet").disabled = false;
@@ -173,7 +189,7 @@
     try {
       const saved = await api("/api/knowledge", {
         method: "POST",
-        body: JSON.stringify({ name, note: $("setNote").value.trim(), kind: "text", body, pinned: $("textPinned").checked }),
+        body: JSON.stringify({ name, note: $("setNote").value.trim(), kind: "text", body, pinned: $("textPinned").checked, character: $("setCharacter").value }),
       });
       $("setName").value = "";
       $("setNote").value = "";
@@ -241,18 +257,26 @@
       const pin = !own && el("input", { type: "checkbox", class: "switch", role: "switch", checked: s.pinned, "aria-label": "Завжди пам'ятати «" + s.name + "»" });
       if (pin) pin.addEventListener("change", () => patch(s, { pinned: pin.checked }, pin));
       const meta = [text ? chars(s.chars || 0) : records(s.count), s.source, fmtDate(s.created_at)].filter(Boolean).join(" · ");
+      // Whose set it is: all of them, or one character that alone knows it.
+      const who = el("select", { class: "who", "aria-label": "Для кого «" + s.name + "»", disabled: own });
+      const choices = characters.some((c) => c.id === s.character) || !s.character ? characters : [...characters, { id: s.character, label: s.character }];
+      who.replaceChildren(new Option("Для всіх", ""), ...choices.map((c) => new Option(c.label, c.id)));
+      who.value = s.character || "";
+      who.addEventListener("change", () => patchCharacter(s, who));
       return el("article", { class: "set" + (s.enabled ? "" : " off") },
         el("div", { class: "set-head" },
           el("div", { class: "set-text" },
             el("strong", {}, s.name),
             el("span", { class: "muted small" },
               el("span", { class: "set-kind" + (s.pinned ? " pinned" : "") }, s.pinned ? "Завжди пам'ятати" : text ? "Текст" : "Записи"),
+              s.character && el("span", { class: "set-kind pinned" }, "Лише " + characterName(s.character)),
               meta)),
           el("div", { class: "set-switches" },
             el("label", { class: "set-switch" }, el("span", { class: "small" }, s.enabled ? "Єва знає" : "Вимкнено"), sw),
             pin && el("label", { class: "set-switch" }, el("span", { class: "small" }, "Завжди пам'ятати"), pin))),
         s.note && el("p", { class: "hint" }, s.note),
         el("div", { class: "row set-actions" },
+          !own && el("label", { class: "set-who small" }, "Для кого ", who),
           view,
           !own && el("button", { class: "btn small-btn ghost", type: "button", onclick: () => rename(s) }, "Перейменувати"),
           el("button", { class: "btn small-btn ghost danger-text", type: "button", onclick: () => remove(s) }, "Видалити")),
@@ -340,6 +364,17 @@
     }
   }
 
+  async function patchCharacter(s, select) {
+    try {
+      await api("/api/knowledge/" + s.id, { method: "POST", body: JSON.stringify({ character: select.value }) });
+      status(select.value ? "«" + s.name + "» тепер знає лише " + characterName(select.value) + "." : "«" + s.name + "» знають усі персонажі.", "ok");
+      await loadSets();
+    } catch (err) {
+      select.value = s.character || "";
+      status(err.message, "err");
+    }
+  }
+
   async function rename(s) {
     const name = (prompt("Новий заголовок розділу:", s.name) || "").trim();
     if (!name || name === s.name) return;
@@ -380,5 +415,5 @@
   if (store.get("kb.tab") === "text") showTab("text");
   $("cancelSet").addEventListener("click", cancel);
   if (!BACKEND) { $("sets").replaceChildren(el("p", { class: "muted empty" }, "Не вказано адресу бекенду.")); return; }
-  loadSets();
+  loadCharacters().then(loadSets);
 })();

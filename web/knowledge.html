@@ -20,7 +20,7 @@
         <h1>Знання</h1>
         <p class="sub">Що знає Єва. Записи про людей (з таблиці чи документа) — вона згадує їх як знайомих: «ти знаєш
           Олега?». Текстові розділи під своїми заголовками — правила, подія, історії. Що ти розкажеш («запам'ятай, що Іра
-          любить йогу»), вона дописує сама в набір «Єва запам'ятала». Консьєрж звіряє гостей лише із записами.</p>
+          любить йогу»), вона дописує сама в набір «Єва запам'ятала» (кожен персонаж — у свій, «Пам'ять: …»). Консьєрж звіряє гостей лише із записами.</p>
       </div>
       <a id="backLink" class="nav-btn header-link" href="index.html">← До помічника</a>
     </header>
@@ -33,6 +33,9 @@
       <input id="setName" class="field" type="text" maxlength="120" placeholder="Напр.: Гості, Правила свята, Сімейні історії">
       <label for="setNote" class="gap">Опис <span class="muted small">— необов'язково</span></label>
       <input id="setNote" class="field" type="text" maxlength="1000" placeholder="Що тут і для чого">
+      <label for="setCharacter" class="gap">Для кого</label>
+      <select id="setCharacter" class="field"><option value="">Для всіх персонажів</option></select>
+      <p class="hint">Розділ для одного персонажа знає тільки він: решта про нього не чули. Це можна змінити потім у списку розділів.</p>
 
       <nav class="mode-tabs" role="tablist" aria-label="Що додати">
         <button id="tabFile" type="button" role="tab" aria-selected="true" aria-controls="paneFile">Записи з файлу</button>
