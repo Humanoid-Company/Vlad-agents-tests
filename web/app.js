@@ -469,16 +469,16 @@
   };
 
   const songs = { list: [], current: store.get("va-song") || "", audio: new Audio(), loadedId: "",
-    playing: false, primed: false, pending: false, pendingSince: 0, pendingTimer: null, mutedMic: false, buf: "", timer: null };
+    playing: false, primed: false, pending: false, pendingSince: 0, pendingTimer: null, mutedMic: false, left: null };
   songs.audio.setAttribute("playsinline", "");
-  const MUSIC_REQUEST_RE = /(увімкн|включ|запуст|постав|заграй|пусти)[а-яіїєґ']*[\s,]+([^\s,]+[\s,]+){0,2}?(музик|пісн|пісе|трек)/i;
 
   function showState() {
     const m = eva.mode;
     if (m === "off") return; // stop() sets its own text
     let state;
     if (songs.playing && m !== "connecting" && m !== "switching") state = ["Грає пісня — " + callName + " мовчить", "wait"];
-    else if (songs.pending && m === "active") state = ["Пісня почнеться, щойно " + callName + " договорить", "wait"];
+    else if (songs.pending && m === "active") state = [songs.left === null ? "Пісня почнеться, коли розмова затихне"
+      : "Пісня почнеться за " + songs.left + " с — скажіть щось, щоб відкласти", "wait"];
     else if (micMuted && m !== "connecting" && m !== "switching") state = ["Мікрофон вимкнено — " + callName + " нічого не чує", "wait"];
     else if (m === "connecting") state = ["Підключаюсь…", "busy"];
     else if (m === "switching") state = ["Перемикаю голос…", "busy"];
@@ -854,7 +854,6 @@
         appendTranscript("user", event.delta);
         eva.lastUserAt = Date.now();
         eva.recentUser = (eva.recentUser + event.delta).slice(-80);
-        checkMusicRequest(event.delta);
         // «Дякую, Єва» — also while she is talking: cut her off and pause.
         if (isStop(eva.recentUser)) { pauseEva(); break; }
         eva.thinking = true;
@@ -2031,7 +2030,7 @@
   }
 
   // ── Музика ──
-  // Songs are shared (the server keeps them): one added on a laptop is there on every phone. They play by the button or by «увімкни музику»
+  // Songs are shared (the server keeps them): one added on a laptop is there on every phone. They play by the button only
   // (the picked song only: a song is chosen by hand, never by voice). She must not speak over a song: it
   // pauses her and turns the mic off — so she hears nothing of it — and both come back when it stops.
   // The list is the server's (server/songs.py): what one device uploads, every device and everyone sees.
@@ -2136,15 +2135,16 @@
     if (!song) { addLine("system", "Спершу додайте пісню в панелі «Музика»."); return; }
     if (songs.playing || songs.pending) return;
     if (eva.mode === "connecting" || eva.mode === "switching") { addLine("system", "Зачекайте, поки розмова підключиться, і вмикайте пісню."); return; }
-    if (eva.mode === "active" && sheIsBusy()) { queueSong(); return; } // she finishes her phrase first
+    if (eva.mode === "active" && quietFor() < SONG_NOW_QUIET_MS) { queueSong(); return; } // the talk goes on first
     startSong();
   }
 
-  // She is talking, the user is talking, or an answer is on its way (or she went quiet for less than a breath).
-  const sheIsBusy = () => barge.audible || barge.speaking || eva.thinking
-    || Date.now() - Math.max(barge.audibleEndedAt, eva.lastAudibleAt) < SONG_AFTER_QUIET_MS;
-  const SONG_AFTER_QUIET_MS = 1200;
-  const SONG_WAIT_MAX_MS = 20000; // an answer that never came must not hold the song forever
+  // A queued song waits for the conversation to go quiet — she and the user both — this long, so a question
+  // asked after pressing the button is answered first and the song does not cut into the talk.
+  const SONG_QUIET_MS = 5000;
+  const SONG_NOW_QUIET_MS = 1200; // she has just finished: the button starts the song at once
+  const talkingNow = () => barge.audible || barge.speaking || eva.thinking;
+  const quietFor = () => (talkingNow() ? 0 : Date.now() - Math.max(barge.audibleEndedAt, eva.lastAudibleAt, eva.lastUserAt));
 
   // iOS lets a page start audio only from a tap: a short silent play inside one unlocks this element for the
   // song that starts later, after she has finished (no tap then).
@@ -2162,15 +2162,19 @@
 
   function queueSong() {
     songs.pending = true;
-    songs.pendingSince = Date.now();
+    songs.left = null;
     songs.pendingTimer = setInterval(() => {
       if (!songs.pending) { clearInterval(songs.pendingTimer); return; }
-      const stuck = !barge.audible && Date.now() - songs.pendingSince > SONG_WAIT_MAX_MS;
-      if (eva.mode === "active" && sheIsBusy() && !stuck) return;
+      // A call that is no longer going (a pause, the end) has nothing to wait for.
+      if (eva.mode === "active" && quietFor() < SONG_QUIET_MS) {
+        const left = talkingNow() ? null : Math.ceil((SONG_QUIET_MS - quietFor()) / 1000);
+        if (left !== songs.left) { songs.left = left; showState(); }
+        return;
+      }
       const song = songs.list.find((x) => x.id === songs.current);
       cancelPending();
       if (song && !songs.playing) startSong();
-    }, 300);
+    }, 250);
     showSongs();
     showState();
   }
@@ -2215,17 +2219,6 @@
     }
     showSongs();
     if (eva.mode !== "off") showState();
-  }
-
-  // «Увімкни музику» in the Live transcript: plays the picked song once the user pauses.
-  function checkMusicRequest(delta) {
-    songs.buf = (songs.buf + delta).slice(-200);
-    clearTimeout(songs.timer);
-    if (!MUSIC_REQUEST_RE.test(songs.buf)) return;
-    songs.timer = setTimeout(() => {
-      songs.buf = "";
-      if (eva.mode === "active") playSong();
-    }, 900);
   }
 
   function initMusic() {
@@ -2726,7 +2719,7 @@
       if (eva.mode !== "off") { stop(); return; }
       if (noMicReason()) { showNoMic(); setStatus("Немає доступу до мікрофона", "err"); postDiag(true); return; }
       if (songs.playing || songs.pending) stopSong(); // a new call is not started over a song
-      primeSong(); // so that «увімкни музику» later can start the song without a tap
+      primeSong(); // so that a song queued behind the conversation can start later without a tap
       meterReset(); // a new call counts from zero
       start(defaultStart()); // asks for the mic synchronously, while the tap still counts
       primeAudio(); // then, in the same tap, the audio the gate will use
