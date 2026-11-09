@@ -143,3 +143,46 @@ FIND_GUEST_TOOL: dict = _fn(
     },
     required=["name"],
 )
+
+# Web «Музика» (server/music.py): the page records the music nearby while this runs, like look_at_camera's frame.
+RECOGNIZE_SONG_TOOL: dict = _fn(
+    "recognize_song",
+    "Name the song or music playing near the user (like Shazam): the page listens through the microphone for about "
+    "ten seconds, then the server says what it is. Use for «що це грає?», «що за пісня?», «впізнай пісню», «як "
+    "називається ця музика?». One call per request; never guess a song yourself. Then tell the title and the "
+    "artist; if the result says nothing was recognised, pass that on.",
+    {},
+)
+
+# Web «Музика»: a new song by Lyria. It takes a minute or two, so the call only starts it; she is told when it is ready.
+GENERATE_SONG_TOOL: dict = _fn(
+    "generate_song",
+    "Write and record a new song or piece of music (AI music generation). Use for «напиши / згенеруй / створи / "
+    "заспівай пісню про …», «зроби мелодію …». It starts the song and returns at once: it is ready in a minute or two "
+    "and appears in «Музика»; the user is told then. Write the prompt yourself from what they asked: genre, mood, "
+    "tempo, instruments, the kind of voice, in the language of the lyrics. For a song with words write short "
+    "original lyrics yourself (two verses and a chorus at most, in the user's language, with [Verse] / [Chorus] "
+    "tags) unless they gave their own; never existing lyrics, never «у стилі / голосом» a real artist.",
+    {
+        "prompt": {"type": "string", "description": "Musical description: genre, mood, tempo, instruments, voice, theme"},
+        "lyrics": {"type": "string", "description": "The lyrics with [Verse] / [Chorus] tags; omit for instrumental"},
+        "instrumental": {"type": "boolean", "description": "true — music only, no vocals"},
+        "title": {"type": "string", "description": "A short title for the song"},
+    },
+    required=["prompt"],
+)
+
+# Web «Музика»: start a song from the shared list (or the preview of the one just recognised) on the user's page.
+PLAY_SONG_TOOL: dict = _fn(
+    "play_song",
+    "Play a song on the user's page: one from «Музика» by its name («увімкни Червону руту», «увімкни ту, що ти "
+    "написала»), or recognized=true for the 30 s preview of the song just recognised («увімкни її»). While a "
+    "song plays the assistant is paused and hears nothing — the user stops it on the page. If the result lists "
+    "songs instead, ask which one.",
+    {
+        "name": {"type": "string", "description": "The song's name or words of it as said; omit with recognized=true"},
+        "recognized": {"type": "boolean", "description": "true — the song recognize_song just named"},
+    },
+)
+
+MUSIC_TOOLS: list[dict] = [RECOGNIZE_SONG_TOOL, GENERATE_SONG_TOOL, PLAY_SONG_TOOL]
