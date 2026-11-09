@@ -32,3 +32,9 @@ services:
         sync: false
       - key: DATABASE_URL # Neon Postgres for «Знання» (postgresql://…?sslmode=require); empty = a SQLite file every deploy wipes
         sync: false
+      - key: AUDD_API_TOKEN # «Музика» → Шазам (AudD); empty = recognition says it is not set up
+        sync: false
+      - key: GEMINI_API_KEY # «Музика» → new songs (Lyria via the Gemini API); empty = generation says it is not set up
+        sync: false
+      - key: LYRIA_MODEL # lyria-3.5 (full songs) or lyria-3-clip-preview (30 s, faster)
+        value: lyria-3.5

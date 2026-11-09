@@ -97,3 +97,14 @@ def test_every_character_but_the_cat_is_a_person():
         assert ("a living person, and you know it" in text) == persona.is_person
         if persona.is_person:  # the one limit: a sincere question out of the game is answered truthfully
             assert "never deny it" in text and "an AI playing" in text
+
+
+def test_no_character_is_an_ai_assistant():
+    """The strict rule closes every character's prompt (the cat too), and the sincere-question limit stays."""
+    from prompts.live_prompt import build_live_prompt
+    from voice.options import VOICE_PERSONAS
+
+    for persona in VOICE_PERSONAS.values():
+        text = build_live_prompt(language_name="Ukrainian", assistant_name=None, today="x", voice=persona.id)
+        assert "STRICT RULE — who you are" in text and "NOT an AI assistant" in text or "You are NOT an AI" in text
+        assert "never deny it" in text
