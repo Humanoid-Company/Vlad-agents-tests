@@ -36,3 +36,20 @@ def _no_own_voices(monkeypatch):
     """The preset voices by default, whatever the real .env holds; a test sets OPENAI_VOICE_* to try an own voice."""
     for name in ("OPENAI_VOICE_TARAS", "OPENAI_VOICE_TOLIK", "OPENAI_VOICE_TOLIK_RAW", "OPENAI_VOICE_KISHKA"):
         monkeypatch.delenv(name, raising=False)
+
+
+class _VisionOff:
+    """The vision model in tests: always fails, so look_at_camera falls back to the image and nothing is billed."""
+
+    class responses:  # noqa: N801 — mirrors client.responses
+        @staticmethod
+        def create(**kwargs):
+            raise RuntimeError("vision API is off in tests")
+
+
+@pytest.fixture(autouse=True)
+def _no_vision_api(monkeypatch):
+    """Tests never reach the real vision model (server/vision.py); a test stubs it to try the text path."""
+    from server import vision
+
+    monkeypatch.setattr(vision.vision, "_client", _VisionOff())

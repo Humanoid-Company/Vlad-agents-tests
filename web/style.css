@@ -155,6 +155,11 @@ footer { margin-top: 20px; text-align: center; }
 }
 .camera-view[hidden] { display: none; }
 .camera-view.mirror { transform: scaleX(-1); }
+/* Фронтальна / Задня (phones): two halves of one control, the picked one filled. */
+.facing { display: flex; gap: 8px; margin-top: 12px; }
+.facing[hidden] { display: none; }
+.facing .btn { flex: 1 1 0; padding: 10px 8px; }
+.facing .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 
 /* «Мікрофон недоступний» (web/app.js showNoMic) */
 .dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--text);

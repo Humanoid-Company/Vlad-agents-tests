@@ -79,7 +79,7 @@ _APPENDED = {
     "session.commentary.appended": "commentary",
     "session.thinking.appended": "thinking",
 }
-_OWN_EVENT_PREFIXES = ("comment_", "instr_", "tool_result_", "continue_")
+_OWN_EVENT_PREFIXES = ("comment_", "instr_", "think_", "tool_result_", "continue_")
 
 
 def _parsed_args(arguments: Any) -> Any:
@@ -213,6 +213,15 @@ class SidebandToolBridge:
         self._log("note", via="commentary", text=text)
         await self._connection.session.commentary.append(
             content=text, delegation_id=None, event_id=f"comment_{uuid.uuid4().hex[:8]}"
+        )
+
+    async def think(self, text: str) -> None:
+        """Quiet context she knows but does not say now (the camera's scene line)."""
+        if not self.is_open:
+            return
+        self._log("note", via="thinking", text=text)
+        await self._connection.session.thinking.append(
+            content=text, delegation_id=None, event_id=f"think_{uuid.uuid4().hex[:8]}"
         )
 
     async def append_instruction(self, text: str, *, quiet_s: float = 3.0, max_wait_s: float = 120.0) -> None:

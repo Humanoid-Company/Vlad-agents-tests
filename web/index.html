@@ -147,6 +147,11 @@
         </span>
         <input id="camera" type="checkbox" class="switch" role="switch">
       </label>
+      <!-- Phones and tablets: which side looks. Front — «подивись на мене»; back — what is in front of you. -->
+      <div id="cameraFacing" class="facing" role="group" aria-label="Яка камера" hidden>
+        <button type="button" class="btn" data-facing="user" aria-pressed="true">Фронтальна</button>
+        <button type="button" class="btn" data-facing="environment" aria-pressed="false">Задня</button>
+      </div>
       <video id="cameraView" class="camera-view" autoplay muted playsinline hidden></video>
       <p id="devicesNow" class="devices-now"></p>
       <button id="devicesAllow" class="btn small-btn" type="button" hidden>Показати пристрої</button>

@@ -38,6 +38,21 @@ OPENAI_LIVE_PARALLEL_TOOLS: bool = os.getenv("OPENAI_LIVE_PARALLEL_TOOLS", "true
 # tokens a step (8 s) and searched a third time; a detailed Deadlock patch question 16–17 s → 6–8 s,
 # by voice on GPT-Live 6.4 s (was up to 38 s). The camera showed no difference either way.
 OPENAI_LIVE_BACKEND_EFFORT: str = os.getenv("OPENAI_LIVE_BACKEND_EFFORT", "low").strip().lower()
+# ── Camera (web): a fast vision model sees for her (server/vision.py) ─────────────────
+# The model that reads camera frames — a look and the scene line. No reasoning: a frame is read at once.
+OPENAI_VISION_MODEL: str = os.getenv("OPENAI_VISION_MODEL", OPENAI_LIVE_BACKEND_MODEL)
+OPENAI_VISION_EFFORT: str = os.getenv("OPENAI_VISION_EFFORT", "none").strip().lower()
+OPENAI_VISION_TIMEOUT_S: float = float(os.getenv("OPENAI_VISION_TIMEOUT_S", "8"))
+# text: look_at_camera returns what the vision model saw (the backend only passes it on);
+# image: the old way — the frame goes to the backend model itself. Text falls back to the image on an error.
+CAMERA_LOOK_MODE: str = os.getenv("CAMERA_LOOK_MODE", "text").strip().lower()
+# The scene line: a changed view described in a sentence, sent to GPT-Live as quiet context.
+CAMERA_SCENE_CONTEXT: bool = os.getenv("CAMERA_SCENE_CONTEXT", "true").lower() in ("1", "true", "yes")
+# At most one description this often; and this often anyway when the page sees no change.
+CAMERA_SCENE_MIN_S: float = float(os.getenv("CAMERA_SCENE_MIN_S", "3"))
+CAMERA_SCENE_MAX_S: float = float(os.getenv("CAMERA_SCENE_MAX_S", "20"))
+# How different a frame must be from the last described one (the page's score, 0–100) to count as a change.
+CAMERA_SCENE_CHANGE: float = float(os.getenv("CAMERA_SCENE_CHANGE", "6"))
 # Gleam: the team's pick by ear on Ukrainian samples.
 OPENAI_LIVE_VOICE: str = os.getenv("OPENAI_LIVE_VOICE", "willow")  # Віра; a picker id (voice/options.py)
 OPENAI_LIVE_AUDIO_RATE: int = int(os.getenv("OPENAI_LIVE_AUDIO_RATE", "24000"))

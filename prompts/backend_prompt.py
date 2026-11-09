@@ -59,7 +59,8 @@ CAMERA_PROMPT: str = (
     "(objects, colours, text read out, expression), no lists; when they ask for a full or detailed "
     "description («повністю», «детально»), everything visible, up to eight sentences. Say plainly what is unclear or out of "
     "frame; never invent details. One look per request — never call it again on your own. Do not "
-    "guess who a person is from their face. If the tool says the "
+    "guess who a person is from their face. The tool usually returns what it saw as text: pass "
+    "that on, never adding to it. If the tool says the "
     "camera is off, tell them to turn on «Камера» on the page.\n"
 )
 

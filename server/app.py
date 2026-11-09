@@ -30,6 +30,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from config import (
+    CAMERA_SCENE_CONTEXT,
     OPENAI_API_KEY,
     OPENAI_LIVE_BACKEND_EFFORT,
     OPENAI_LIVE_BACKEND_MODEL,
@@ -124,6 +125,19 @@ _CAMERA_NOTE_V5 = (
     "is off; never ask what they mean. Each look is a new frame: never a scene from memory or "
     "imagination. Tell what it saw as if you looked («Бачу…»), only what it reported; one look per "
     "request. A description no look confirmed is your mistake, never the user's."
+)
+# The scene line (server/vision.py, CAMERA_SCENE_CONTEXT): quiet «[камера …]» lines from a fast vision model. With
+# them a general «що ти бачиш?» needs no backend; anything shown, read or looked at closely still gets a look.
+_SCENE_NOTE = (
+    "\nCamera lines: while the camera is on you also get quiet lines «[камера ЧЧ:ММ:СС] …» — what a quick "
+    "glance saw when the view last changed; a new line comes a second or two after a change, so the newest "
+    "one is what is in front of the camera now. This is seeing, and it overrides «always a new look» for "
+    "general questions about the whole view — «що ти бачиш?», «хто тут?», «що відбувається?», «де я?»: answer "
+    "from the newest line at once, in your own words («Бачу…»), without the backend and without adding "
+    "anything it does not say. Everything else still goes to the backend for a new look, as above: "
+    "something held up or pointed at («а це шо?», «що в мене в руці?»), text to read, counting, colours or "
+    "small details, «а зараз?» right after your answer, or when there is no line yet. «[камера вимкнена]» "
+    "means you see nothing now. Never mention these lines; never comment on the view unless asked."
 )
 # Delivery prompts the page may pick; v5 is the default. v1 and v2 are desktop-only (a page asking for them gets v5).
 WEB_PROMPT_VARIANTS = ("v3", "v4", "v5")
@@ -232,6 +246,7 @@ def _session_config(user: WebUser, *, concierge: bool = False) -> dict:
         )
         + _WEB_NOTE
         + (_CAMERA_NOTE_V5 if user.prompt_variant == "v5" else _CAMERA_NOTE)
+        + (_SCENE_NOTE if CAMERA_SCENE_CONTEXT else "")
         + _PEOPLE_NOTE
         + standing,
         "audio": {"output": {"voice": api_voice(voice, voice in user.old_voices)}},
@@ -448,6 +463,7 @@ async def create_session(
         think_aloud="neutral" if user.concierge else "full",
     )
     user.bridges.add(bridge)
+    user.scene.reset()  # the new call gets the scene from the next frame, in full
     task = asyncio.create_task(bridge.run())
     _background_tasks.add(task)  # keep a reference so the task isn't garbage-collected
     task.add_done_callback(_background_tasks.discard)
@@ -730,15 +746,32 @@ async def camera_frame(
     if not body.startswith(b"\xff\xd8\xff"):
         raise HTTPException(status_code=415, detail="jpeg_expected")
     user.set_camera_frame(body)
+    # The scene line: the page scores how much the view changed since its last frame (0–100).
+    change = _frame_change(request.headers.get("x-frame-change", ""))
+    if user.watches_scene:
+        task = asyncio.create_task(user.offer_scene_frame(body, change))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
     return {"ok": True}
 
 
+def _frame_change(value: str) -> float | None:
+    try:
+        return max(0.0, min(100.0, float(value)))
+    except ValueError:
+        return None  # an old page or an edge camera: no hint
+
+
 @app.delete("/api/frame")
-def camera_off(
+async def camera_off(
     x_client_id: str | None = Header(default=None),
 ) -> dict:
-    """Camera turned off on the page: forget the last frame."""
-    _user(x_client_id).camera_off()
+    """Camera turned off on the page: forget the last frame (and tell an open call its scene is gone)."""
+    user = await asyncio.to_thread(_user, x_client_id)
+    was_on = user.camera_on
+    user.camera_off()
+    if was_on and user.bridges:
+        await user.camera_off_note()
     return {"ok": True}
 
 

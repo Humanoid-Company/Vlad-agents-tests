@@ -95,6 +95,8 @@
   let micId = store.get("va-mic") || "";
   let speakerId = store.get("va-speaker") || "";
   let cameraId = store.get("va-camera") || "";
+  // Phones: front («user») or back («environment») camera, unless a camera is picked in «Пристрої».
+  let cameraFacing = store.get("va-camera-facing") === "environment" ? "environment" : "user";
 
   const DEBUG = params.get("debug") === "1";
   // Delivery prompt (prompts/live_prompt.py): v5 is the usual one (v4 condensed, the same rules said
@@ -2596,9 +2598,10 @@
   // Camera: Єва can't see it herself (GPT-Live takes no images). The backend tool look_at_camera hands
   // a frame to the model that runs her tools. The page snaps that frame the moment it sees the tool
   // called (the data channel carries the session's events), so a look shows what is held up now; the
-  // tool waits for it. A frame every FRAME_EVERY_MS is only the fallback (an upload lost). Nothing is
-  // sent on a pause or with the camera off.
-  const FRAME_EVERY_MS = 3000;
+  // tool waits for it. A frame every FRAME_EVERY_MS is the fallback (an upload lost) and feeds the scene
+  // line: each carries X-Frame-Change, how much the view changed (0–100), so the server describes it
+  // only when it did (server/vision.py). Nothing is sent on a pause or with the camera off.
+  const FRAME_EVERY_MS = 1500;
   const FRAME_MAX_SIDE = 768;  // fallback frames: ~400 image tokens
   const LOOK_MAX_SIDE = 1024;  // the look itself: small print stays legible (~600 tokens, ≈$0.0001)
   const FRAME_TIMEOUT_MS = 4000; // a hung upload must not stop the next ones
@@ -2606,6 +2609,8 @@
   let frameTimer = null;
   let frameBusy = false;
   let frameCanvas = null;
+  let thumbCanvas = null;
+  let lastThumb = null; // grey 32×18 of the last frame sent: the change score compares against it
   const snapped = new Set(); // calls already snapped for (output_item.added and .done both come)
 
   function showCamera() {
@@ -2615,16 +2620,18 @@
   }
 
   async function startCamera() {
-    // Front camera by default: «подивись на мене»; the back one is picked in «Пристрої».
-    const video = Object.assign({ width: { ideal: 1280 }, height: { ideal: 720 } },
-      cameraId ? { deviceId: { exact: cameraId } } : { facingMode: "user" });
+    // The side picked under «Камера» (front by default: «подивись на мене»), or a camera from «Пристрої».
+    const size = { width: { ideal: 1280 }, height: { ideal: 720 } };
+    const video = Object.assign({}, size,
+      cameraId ? { deviceId: { exact: cameraId } } : { facingMode: { exact: cameraFacing } });
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ video });
     } catch (err) {
-      if (!cameraId || !["OverconstrainedError", "NotFoundError"].includes(err && err.name)) throw err;
-      setDevice("camera", "");
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+      if (!["OverconstrainedError", "NotFoundError"].includes(err && err.name)) throw err;
+      // The picked camera is gone, or there is no such side (a laptop has one camera): whatever there is.
+      if (cameraId) setDevice("camera", "");
+      stream = await navigator.mediaDevices.getUserMedia({ video: Object.assign({}, size, { facingMode: cameraFacing }) });
     }
     if (!$("camera").checked) { stream.getTracks().forEach((t) => t.stop()); return; } // turned off meanwhile
     if (cam) cam.getTracks().forEach((t) => t.stop());
@@ -2634,7 +2641,7 @@
     view.srcObject = cam;
     view.hidden = false;
     // The preview is mirrored for a front camera, like a mirror; frames go out as the camera sees.
-    const facing = (track.getSettings && track.getSettings().facingMode) || "user";
+    const facing = (track.getSettings && track.getSettings().facingMode) || (cameraId ? "user" : cameraFacing);
     view.classList.toggle("mirror", facing === "user");
     track.onended = () => { if (cam === stream) { $("camera").checked = false; stopCamera(); addLine("system", "Камеру вимкнено."); } };
     clearInterval(frameTimer);
@@ -2651,6 +2658,7 @@
     cam = null;
     $("cameraView").srcObject = null;
     $("cameraView").hidden = true;
+    lastThumb = null;
     showCamera();
     // The server forgets the last frame: Єва says the camera is off instead of describing an old one.
     if (BACKEND) fetch(BACKEND + "/api/frame", { method: "DELETE", headers: headers() }).catch(() => {});
@@ -2669,7 +2677,39 @@
 
   async function changeCamera() {
     setDevice("camera", $("cameraSelect").value);
+    showFacing();
     if (cam) await toggleCamera();
+  }
+
+  // Фронтальна / Задня: on phones and tablets (a laptop has one camera). Picking a side drops a camera
+  // picked in «Пристрої», and a camera that is on switches at once — mid-call too.
+  function showFacing() {
+    $("cameraFacing").hidden = !(IOS || ANDROID);
+    for (const b of $("cameraFacing").querySelectorAll("button")) {
+      b.setAttribute("aria-pressed", String(!cameraId && b.dataset.facing === cameraFacing));
+    }
+  }
+
+  async function pickFacing(facing) {
+    const same = facing === cameraFacing && !cameraId;
+    cameraFacing = facing;
+    store.set("va-camera-facing", facing);
+    if (cameraId) { setDevice("camera", ""); $("cameraSelect").value = ""; }
+    showFacing();
+    if (!cam || same) return;
+    // A phone opens one camera at a time: the old one stops first. The server keeps its last frame
+    // meanwhile (no «камера вимкнена» for a switch); the next frame is a new view.
+    cam.getTracks().forEach((t) => t.stop());
+    cam = null; // no frames from the stopped one while the new one opens
+    lastThumb = null;
+    try {
+      await startCamera();
+      addLine("system", facing === "environment" ? "Камера: задня." : "Камера: фронтальна.");
+    } catch (err) {
+      $("camera").checked = false;
+      stopCamera();
+      addLine("system", err && err.name === "NotAllowedError" ? "Немає доступу до камери." : "Не вдалося перемкнути камеру.");
+    }
   }
 
   let lastSnapAt = 0;
@@ -2698,6 +2738,7 @@
     canvas.width = Math.round(view.videoWidth * scale);
     canvas.height = Math.round(view.videoHeight * scale);
     canvas.getContext("2d").drawImage(view, 0, 0, canvas.width, canvas.height);
+    const change = frameChange(canvas);
     if (!look) frameBusy = true;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), FRAME_TIMEOUT_MS);
@@ -2705,12 +2746,34 @@
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", look ? 0.85 : 0.7));
       if (blob && cam) {
         await fetch(BACKEND + "/api/frame", {
-          method: "POST", headers: Object.assign(headers(), { "Content-Type": "image/jpeg" }), body: blob, signal: ctrl.signal,
+          method: "POST", body: blob, signal: ctrl.signal,
+          headers: Object.assign(headers(), { "Content-Type": "image/jpeg" }, change === null ? {} : { "X-Frame-Change": String(change) }),
         });
       }
     } catch { /* offline or timed out: the next frame tries again */ } finally {
       clearTimeout(timer);
       if (!look) frameBusy = false;
+    }
+  }
+
+  // How much the view changed since the last frame sent: mean grey difference on a 32×18 copy, 0–100.
+  // Cheap (576 pixels), and blind to JPEG noise; null for the first frame.
+  function frameChange(source) {
+    try {
+      thumbCanvas = thumbCanvas || Object.assign(document.createElement("canvas"), { width: 32, height: 18 });
+      const ctx = thumbCanvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(source, 0, 0, 32, 18);
+      const px = ctx.getImageData(0, 0, 32, 18).data;
+      const grey = new Uint8Array(32 * 18);
+      for (let i = 0; i < grey.length; i++) grey[i] = (px[i * 4] * 3 + px[i * 4 + 1] * 6 + px[i * 4 + 2]) / 10;
+      const prev = lastThumb;
+      lastThumb = grey;
+      if (!prev) return null;
+      let sum = 0;
+      for (let i = 0; i < grey.length; i++) sum += Math.abs(grey[i] - prev[i]);
+      return Math.round((sum / grey.length / 255) * 1000) / 10;
+    } catch {
+      return null;
     }
   }
 
@@ -2770,6 +2833,10 @@
       $(id).addEventListener("focus", namesFirst); // iPhone: its own picker opens anyway; asked at once
     }
     $("camera").addEventListener("change", toggleCamera);
+    for (const b of $("cameraFacing").querySelectorAll("button")) {
+      b.addEventListener("click", () => pickFacing(b.dataset.facing));
+    }
+    showFacing();
     if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === "function") {
       // A headset plugged in or out: the pickers follow.
       navigator.mediaDevices.addEventListener("devicechange", listDevices);

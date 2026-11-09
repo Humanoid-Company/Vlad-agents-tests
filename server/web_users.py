@@ -15,12 +15,15 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from config import WEB_SEARCH_MAX_CALLS_PER_TURN
+from config import CAMERA_LOOK_MODE, CAMERA_SCENE_CONTEXT, TIMEZONE, WEB_SEARCH_MAX_CALLS_PER_TURN
 from integrations.web_search import WebSearchRateLimiter
 from server import checkins, conversations, guests, knowledge
 from server.db import StoreError
+from server.vision import SceneWatcher, VisionError, vision
 from tools.executor import ToolExecutionContext, ToolExecutor
 from tools.results import ToolResult
 from tools.web_search_tool import web_search_tool_result
@@ -106,6 +109,8 @@ class WebUser:
     camera_on: bool = False
     camera_frame: bytes | None = None
     camera_frame_at: float = 0.0
+    # The scene line (server/vision.py): what a quick glance saw when the view last changed.
+    scene: SceneWatcher = field(init=False)
 
     @property
     def character(self) -> str:
@@ -126,6 +131,44 @@ class WebUser:
 
     def camera_off(self) -> None:
         self.camera_on, self.camera_frame, self.camera_frame_at = False, None, 0.0
+        self.scene.reset()
+
+    @property
+    def language_name(self) -> str:
+        return LANGUAGE_OPTIONS.get(self.language, LANGUAGE_OPTIONS["uk"])
+
+    def _describe_scene(self, jpeg: bytes, previous: str) -> str | None:
+        return vision.scene(jpeg, previous, language=self.language_name)
+
+    @property
+    def watches_scene(self) -> bool:
+        """Scene lines go to an open call of Єва (the concierge has no camera)."""
+        return CAMERA_SCENE_CONTEXT and self.camera_on and bool(self.bridges) and not self.concierge
+
+    async def offer_scene_frame(self, jpeg: bytes, change: float | None) -> bool:
+        """A frame from the page: describe it if the view changed; the line goes to the open calls."""
+        if not self.watches_scene:
+            return False
+        return await self.scene.offer(jpeg, change, self.think_scene)
+
+    async def think_scene(self, text: str) -> None:
+        """The scene line as quiet context: she knows it, says it only when asked."""
+        now = datetime.now(ZoneInfo(TIMEZONE))  # her clock (Render runs in UTC)
+        line = f"[камера {now:%H:%M:%S}] {text}"
+        for bridge in list(self.bridges):
+            try:
+                await bridge.think(line)
+            except Exception:
+                logger.debug("think_scene failed", exc_info=True)
+
+    async def camera_off_note(self) -> None:
+        """Camera turned off mid-call: the last scene line is no longer true."""
+        if CAMERA_SCENE_CONTEXT and not self.concierge:
+            for bridge in list(self.bridges):
+                try:
+                    await bridge.think("[камера вимкнена] Що зараз видно — невідомо; попередні рядки «[камера]» вже не чинні.")
+                except Exception:
+                    logger.debug("camera_off_note failed", exc_info=True)
 
     def must_keep_session(self) -> bool:
         """A pause closes the Live session after 15 s (web/config.js) — but not while a tool still runs in it."""
@@ -150,6 +193,7 @@ class WebUser:
 
     def __post_init__(self) -> None:
         self.owner = self.owner or self.client_id
+        self.scene = SceneWatcher(self._describe_scene)
         self.executor = _build_executor(self)
         self.conversation_character = self.conversation_character or self.character
         self.conversation.on_change = self._save_soon
@@ -362,7 +406,21 @@ def _build_executor(user: WebUser) -> ToolExecutor:
             time.sleep(0.1)
         age = time.time() - frame_at
         question = str(args.get("question") or "").strip()[:300]
-        logger.info("web.camera.look bytes=%s age_s=%.1f", len(frame), age)
+        logger.info("web.camera.look bytes=%s age_s=%.1f mode=%s", len(frame), age, CAMERA_LOOK_MODE)
+        if CAMERA_LOOK_MODE != "image":
+            try:
+                seen = vision.look(frame, question, language=user.language_name)
+            except VisionError as exc:
+                logger.warning("web.camera.vision_failed detail=%s — the frame goes to the backend", exc)
+            else:
+                logger.info("web.camera.vision ms=%s chars=%s", seen.ms, len(seen.text))
+                return ToolResult(
+                    ok=True,
+                    status="ok",
+                    message=f"Погляд через камеру зараз. Що видно: {seen.text} Перекажи це своїми словами "
+                    "(«Бачу…»), нічого не додаючи.",
+                    data={"vision_ms": seen.ms, "frame_age_s": round(age, 1)},
+                )
         return ToolResult(
             ok=True,
             status="ok",
