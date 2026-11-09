@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -47,6 +49,10 @@ def client():
 def _keys(monkeypatch):
     monkeypatch.setattr(music, "AUDD_API_TOKEN", "audd-test")
     monkeypatch.setattr(music, "GEMINI_API_KEY", "gemini-test")
+    monkeypatch.setattr(music, "OPENROUTER_API_KEY", "or-test")
+    monkeypatch.setattr(music, "MUSIC_MODELS", "openrouter:google/lyria-3-pro-preview:free,"
+                        "openrouter:google/lyria-3-pro-preview,gemini:lyria-3-pro")
+    monkeypatch.setattr(music, "_cooldown", {})
     monkeypatch.setattr(music, "jobs", music.JobBoard())
     monkeypatch.setattr(web_users, "MUSIC_RESULT_WAIT_S", 3.0)  # a stuck wait fails the test fast
 
@@ -186,7 +192,7 @@ def test_lyria_response_and_prompt():
 def test_voice_request_starts_a_job_and_the_song_lands_in_music(monkeypatch):
     async def fake_generate(prompt, lyrics, instrumental):
         await asyncio.sleep(0.05)
-        return "audio/mpeg", b"ID3song", "lyrics"
+        return "audio/mpeg", b"ID3song", "lyrics", "lyria-3-pro-preview:free (OpenRouter)"
     monkeypatch.setattr(music, "generate", fake_generate)
     user = web_users.WebUser(client_id="music-voice-client-01")
     told: list[str] = []
@@ -206,7 +212,7 @@ def test_voice_request_starts_a_job_and_the_song_lands_in_music(monkeypatch):
     assert [s["name"] for s in songs.store.list()] == ["Котик"]
     assert told and "Котик" in told[0] and "ready" in told[0]
     job = music.jobs.for_client("music-voice-client-01")[0]
-    assert job["status"] == "done" and job["song_name"] == "Котик"
+    assert job["status"] == "done" and job["song_name"] == "Котик" and job["model"].endswith("(OpenRouter)")
 
 
 def test_failed_song_is_reported(monkeypatch):
@@ -234,8 +240,12 @@ def test_full_music_refuses_the_new_song(monkeypatch):
 
 
 def test_status(client, monkeypatch):
-    assert client.get("/api/music/status").json() == {"recognize": True, "generate": True, "model": music.LYRIA_MODEL}
+    assert client.get("/api/music/status").json() == {"recognize": True, "generate": True, "models": [
+        "lyria-3-pro-preview:free (OpenRouter)", "lyria-3-pro-preview (OpenRouter)", "lyria-3-pro (Gemini)"]}
     monkeypatch.setattr(music, "GEMINI_API_KEY", "")
+    assert client.get("/api/music/status").json()["models"] == [
+        "lyria-3-pro-preview:free (OpenRouter)", "lyria-3-pro-preview (OpenRouter)"]
+    monkeypatch.setattr(music, "OPENROUTER_API_KEY", "")
     assert client.get("/api/music/status").json()["generate"] is False
     assert client.post("/api/music/generate", json={"prompt": "x"}, headers=H).status_code == 503
 
@@ -299,3 +309,121 @@ def test_music_tools_are_in_her_call_not_the_concierges():
     concierge = web_app._session_config(user, concierge=True)
     assert "Music:" not in concierge["instructions"]
     assert "recognize_song" not in str(concierge["delegation"])
+
+
+# ── what went wrong in the first real try ──
+def test_silent_clip_is_answered_without_audd(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(music, "recognize", lambda data, mime: calls.append(1) or {"found": False})
+    res = client.post("/api/music/recognize", params={"via": "voice"}, content=b"RIFF....",
+                      headers={**H, "Content-Type": "audio/wav", "X-Clip-Level": "0.00010"})
+    assert res.json() == {"found": False, "quiet": True} and calls == []
+    user = _user()
+    user.music_listening_at = time.time()
+    result = user.executor.execute_sync("recognize_song", {}, _ctx())
+    assert result.status == "quiet" and "голосніше" in result.message
+    loud = client.post("/api/music/recognize", content=b"RIFF....",
+                       headers={**H, "Content-Type": "audio/wav", "X-Clip-Level": "0.05"})
+    assert loud.status_code == 200 and calls == [1]
+
+
+def test_audd_fingerprint_failure_is_said_plainly(monkeypatch):
+    def fake_post(*args, **kwargs):
+        return httpx.Response(200, json={"status": "error", "error": {"error_code": 300, "error_message":
+                              "Recognition failed: there's been a problem with creating an audio fingerprint."}},
+                              request=httpx.Request("POST", music.AUDD_URL))
+    monkeypatch.setattr(music.httpx, "post", fake_post)
+    with pytest.raises(music.MusicError) as err:
+        music.recognize(b"clip", "audio/webm")
+    assert err.value.code == "bad_clip" and "голосніше" in err.value.message
+
+
+def _route(handlers):
+    """A fake network: each URL answers with its handler's response; the requests are kept."""
+    seen = []
+
+    def handle(request):
+        seen.append((str(request.url), json.loads(request.content or b"{}")))
+        return handlers[request.url.host](request)
+    return httpx.MockTransport(handle), seen
+
+
+def _use(monkeypatch, transport):
+    real = httpx.AsyncClient
+    monkeypatch.setattr(music.httpx, "AsyncClient", lambda **kw: real(transport=transport, **kw))
+
+
+def _sse(*events) -> bytes:
+    return b"".join(b"data: " + json.dumps(e).encode() + b"\n\n" for e in events) + b"data: [DONE]\n\n"
+
+
+def test_openrouter_stream_is_assembled(monkeypatch):
+    mp3 = b"ID3" + bytes(range(60))
+    half = len(mp3) // 2
+    sse = _sse({"choices": [{"delta": {"content": "[Verse] la"}}]},
+               {"choices": [{"delta": {"audio": {"data": base64.b64encode(mp3[:half]).decode()}}}]},
+               {"choices": [{"delta": {"audio": {"data": base64.b64encode(mp3[half:]).decode()}}}]})
+    transport, seen = _route({"openrouter.ai": lambda r: httpx.Response(200, headers={"content-type": "text/event-stream"},
+                                                                         content=sse)})
+    _use(monkeypatch, transport)
+    mime, data, text, model = asyncio.run(music.generate("pop", "[Verse] la", False))
+    assert (mime, data, text, model) == ("audio/mpeg", mp3, "[Verse] la", "lyria-3-pro-preview:free (OpenRouter)")
+    body = seen[0][1]
+    assert body["model"] == "google/lyria-3-pro-preview:free" and body["stream"] is True
+    assert body["modalities"] == ["text", "audio"] and "Lyrics:" in body["messages"][0]["content"]
+
+
+def test_free_limit_runs_out_and_the_next_model_writes_the_song(monkeypatch):
+    """The free model's daily limit → the paid one has no credits → Gemini writes it; next time the free one waits."""
+    def openrouter(request):
+        model = json.loads(request.content)["model"]
+        if model.endswith(":free"):
+            return httpx.Response(429, json={"error": {"code": 429, "message": "Rate limit exceeded: free-models-per-day"}})
+        return httpx.Response(402, json={"error": {"code": 402, "message": "Insufficient credits"}})
+    gemini = lambda request: httpx.Response(200, json=_lyria_body(b"ID3gem"))  # noqa: E731
+    transport, seen = _route({"openrouter.ai": openrouter, "generativelanguage.googleapis.com": gemini})
+    _use(monkeypatch, transport)
+    mime, data, text, model = asyncio.run(music.generate("pop", "", False))
+    assert data == b"ID3gem" and model == "lyria-3-pro (Gemini)"
+    assert [u.split("/")[2] for u, _ in seen] == ["openrouter.ai", "openrouter.ai", "generativelanguage.googleapis.com"]
+    seen.clear()
+    asyncio.run(music.generate("pop", "", False))  # both OpenRouter models are resting now: Gemini at once
+    assert [u.split("/")[2] for u, _ in seen] == ["generativelanguage.googleapis.com"]
+
+
+def test_every_model_out_says_why(monkeypatch):
+    monkeypatch.setattr(music, "GEMINI_API_KEY", "")
+    transport, _ = _route({"openrouter.ai": lambda r: httpx.Response(429, json={"error": {
+        "message": "Rate limit exceeded for model (limit: 0 requests per day on Free Tier)"}})})
+    _use(monkeypatch, transport)
+    with pytest.raises(music.MusicError) as err:
+        asyncio.run(music.generate("pop", "", False))
+    assert err.value.code == "quota" and "ліміт вичерпано" in err.value.message and "оновлюється щодня" in err.value.message
+
+
+def test_a_refused_song_is_not_tried_on_other_models(monkeypatch):
+    transport, seen = _route({"openrouter.ai": lambda r: httpx.Response(400, json={"error": {
+        "message": "Prompt mentions a real artist's voice"}})})
+    _use(monkeypatch, transport)
+    with pytest.raises(music.MusicError) as err:
+        asyncio.run(music.generate("як у Бейонсе", "", False))
+    assert err.value.code == "refused" and len(seen) == 1
+
+
+def test_gemini_free_tier_quota(monkeypatch):
+    monkeypatch.setattr(music, "OPENROUTER_API_KEY", "")
+    transport, _ = _route({"generativelanguage.googleapis.com": lambda r: httpx.Response(429, json={"error": {
+        "message": "Rate limit exceeded for model lyria-3-pro (limit: 0 requests per day on Free Tier)"}})})
+    _use(monkeypatch, transport)
+    with pytest.raises(music.MusicError) as err:
+        asyncio.run(music.generate("pop", "", False))
+    assert err.value.code == "quota"
+    midnight = (int(time.time() // 86400) + 1) * 86400
+    assert music._cooldown["gemini:lyria-3-pro"] == midnight  # a daily limit: skipped until midnight UTC
+
+
+def test_she_asks_what_the_song_is_about_first():
+    from tools.live_schemas import GENERATE_SONG_TOOL, RECOGNIZE_SONG_TOOL
+    assert "можеш створити пісню?" in GENERATE_SONG_TOOL["description"]
+    assert "going to put it on" in RECOGNIZE_SONG_TOOL["description"]
+    assert "ask what about first" in web_app._MUSIC_NOTE and "do not call it" in web_app._MUSIC_BACKEND_NOTE

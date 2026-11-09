@@ -358,6 +358,7 @@
       let remoteSource = null;
       return {
         stream,
+        ctx, // already running (started in a tap): Шазам records its clip through it without a tap of its own
         track: out.stream.getAudioTracks()[0],
         // The assistant's audio, measured only (never played from here). A gate kept for the next
         // call (voice switch) drops the old call's audio first.
@@ -2381,6 +2382,77 @@
     showMusicBtn();
   }
 
+  // The countdown on the button while a clip records.
+  function countdown(ms) {
+    return new Promise((done) => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        const left = Math.ceil((ms - (Date.now() - started)) / 1000);
+        if (left > 0) { showListening(left); return; }
+        clearInterval(timer);
+        done();
+      }, 250);
+    });
+  }
+
+  // The clip as WAV (16-bit mono, ~16 kHz) built here from the raw samples: AudD fingerprints that reliably — the
+  // containers MediaRecorder writes failed (prod: «problem with creating an audio fingerprint»). Its level (RMS)
+  // tells silence apart. The call's running AudioContext is used when there is one (WebKit starts a new one only in
+  // a tap); null when audio can't start here — then MediaRecorder records instead.
+  async function recordWav(stream) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    const shared = gate && gate.ctx && gate.ctx.state === "running" ? gate.ctx : null;
+    let ctx = shared;
+    if (!ctx) {
+      try { ctx = new AudioCtx(); } catch { return null; }
+      await within(ctx.resume(), 1000);
+      if (ctx.state !== "running") { ctx.close().catch(() => {}); return null; }
+    }
+    const source = ctx.createMediaStreamSource(stream);
+    const proc = ctx.createScriptProcessor(4096, 1, 1);
+    const parts = [];
+    let sumSq = 0;
+    let count = 0;
+    proc.onaudioprocess = (e) => {
+      const data = e.inputBuffer.getChannelData(0);
+      parts.push(new Float32Array(data));
+      for (let i = 0; i < data.length; i++) sumSq += data[i] * data[i];
+      count += data.length;
+    }; // the output stays silent: nothing of the clip is played
+    source.connect(proc);
+    proc.connect(ctx.destination);
+    await countdown(CLIP_MS);
+    proc.onaudioprocess = null;
+    source.disconnect();
+    proc.disconnect();
+    const rate = ctx.sampleRate;
+    if (!shared) ctx.close().catch(() => {});
+    if (!count) return null;
+    const step = Math.max(1, Math.floor(rate / 16000));
+    const samples = new Float32Array(count);
+    let at = 0;
+    for (const part of parts) { samples.set(part, at); at += part.length; }
+    const pcm = new Int16Array(Math.floor(count / step));
+    for (let i = 0; i < pcm.length; i++) {
+      let sum = 0;
+      for (let k = 0; k < step; k++) sum += samples[i * step + k];
+      const v = Math.max(-1, Math.min(1, sum / step));
+      pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+    }
+    return { blob: wavBlob(pcm, Math.round(rate / step)), level: Math.sqrt(sumSq / count) };
+  }
+
+  function wavBlob(pcm, rate) {
+    const view = new DataView(new ArrayBuffer(44));
+    const text = (at, str) => { for (let i = 0; i < str.length; i++) view.setUint8(at + i, str.charCodeAt(i)); };
+    text(0, "RIFF"); view.setUint32(4, 36 + pcm.byteLength, true); text(8, "WAVE");
+    text(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    text(36, "data"); view.setUint32(40, pcm.byteLength, true);
+    return new Blob([view, pcm], { type: "audio/wav" });
+  }
+
   function recordClip(stream, type) {
     return new Promise((resolve, reject) => {
       const chunks = [];
@@ -2406,7 +2478,8 @@
     setMusicOpen(true, "shazam");
     if (!musicUi.status.recognize) { shazamNote("Розпізнавання музики ще не налаштоване на сервері (потрібен ключ AudD)."); return; }
     const type = clipType();
-    if (!HAS_MIC_API || !type) { shazamNote("Цей браузер не вміє записувати звук для розпізнавання."); return; }
+    const canWav = Boolean(window.AudioContext || window.webkitAudioContext);
+    if (!HAS_MIC_API || (!type && !canWav)) { shazamNote("Цей браузер не вміє записувати звук для розпізнавання."); return; }
     musicUi.listening = true;
     showListening(CLIP_MS / 1000);
     fetch(BACKEND + "/api/music/listening", { method: "POST", headers: headers() }).catch(() => {});
@@ -2416,12 +2489,14 @@
     let stream = null;
     try {
       stream = await openClipMic();
-      const blob = await recordClip(stream, type);
+      const wav = canWav ? await recordWav(stream) : null;
+      if (!wav && !type) throw new Error("цей браузер не вміє записувати звук");
+      const blob = wav ? wav.blob : await recordClip(stream, type);
       showListening(-1);
       shazamNote("Шукаю, що це…");
-      const res = await fetch(BACKEND + "/api/music/recognize?via=" + via, {
-        method: "POST", headers: { "Content-Type": blob.type || type, "X-Client-Id": clientId }, body: blob,
-      });
+      const sendHeaders = { "Content-Type": blob.type || type, "X-Client-Id": clientId };
+      if (wav) sendHeaders["X-Clip-Level"] = wav.level.toFixed(5);
+      const res = await fetch(BACKEND + "/api/music/recognize?via=" + via, { method: "POST", headers: sendHeaders, body: blob });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.detail || "помилка " + res.status);
       showTrackResult(body);
@@ -2439,7 +2514,8 @@
   function showTrackResult(result) {
     if (!result || !result.found) {
       $("shazamResult").hidden = true;
-      shazamNote("Не вдалося впізнати — піднесіть телефон ближче до звуку й спробуйте ще раз.");
+      shazamNote(result && result.quiet ? "Мікрофон майже нічого не почув — увімкніть музику голосніше або піднесіть телефон ближче."
+        : "Не вдалося впізнати — піднесіть телефон ближче до звуку й спробуйте ще раз.");
       return;
     }
     shazamNote();
@@ -2581,7 +2657,7 @@
 
   function jobState(j) {
     if (j.status === "running") return "Пишеться… " + clock((Date.now() - j.localStart) / 1000);
-    if (j.status === "done") return "Готово — у «Піснях»";
+    if (j.status === "done") return "Готово — у «Піснях»" + (j.model ? " · " + j.model : "");
     return j.error || "Не вдалося";
   }
 
@@ -2621,7 +2697,7 @@
     $("shazamBtn").disabled = !musicUi.status.recognize;
     $("genBtn").disabled = !musicUi.status.generate;
     if (!musicUi.status.recognize) shazamNote("Розпізнавання музики ще не налаштоване на сервері (потрібен ключ AudD).");
-    if (!musicUi.status.generate) genNote("Створення пісень ще не налаштоване на сервері (потрібен ключ Gemini).");
+    if (!musicUi.status.generate) genNote("Створення пісень ще не налаштоване на сервері (потрібен ключ OpenRouter або Gemini).");
   }
 
   // ── her music tools (the backend's calls, seen on the call's data channel) ──

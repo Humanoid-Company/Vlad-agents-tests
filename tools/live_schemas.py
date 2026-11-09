@@ -149,7 +149,8 @@ RECOGNIZE_SONG_TOOL: dict = _fn(
     "recognize_song",
     "Name the song or music playing near the user (like Shazam): the page listens through the microphone for about "
     "ten seconds, then the server says what it is. Use for «що це грає?», «що за пісня?», «впізнай пісню», «як "
-    "називається ця музика?». One call per request; never guess a song yourself. Then tell the title and the "
+    "називається ця музика?», «слухай» once music plays. Not when they only say they are going to put it on — then "
+    "they put it on first. One call per request; never guess a song yourself. Then tell the title and the "
     "artist; if the result says nothing was recognised, pass that on.",
     {},
 )
@@ -159,7 +160,8 @@ GENERATE_SONG_TOOL: dict = _fn(
     "generate_song",
     "Write and record a new song or piece of music (AI music generation). Use for «напиши / згенеруй / створи / "
     "заспівай пісню про …», «зроби мелодію …». It starts the song and returns at once: it is ready in a minute or two "
-    "and appears in «Музика»; the user is told then. Write the prompt yourself from what they asked: genre, mood, "
+    "and appears in «Музика»; the user is told then. Only once the user said what the song is about or its style — "
+    "for a bare «можеш створити пісню?» ask what about instead of calling it. Write the prompt yourself from what they asked: genre, mood, "
     "tempo, instruments, the kind of voice, in the language of the lyrics. For a song with words write short "
     "original lyrics yourself (two verses and a chorus at most, in the user's language, with [Verse] / [Chorus] "
     "tags) unless they gave their own; never existing lyrics, never «у стилі / голосом» a real artist.",

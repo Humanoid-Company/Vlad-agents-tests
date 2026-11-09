@@ -665,6 +665,9 @@ def _build_executor(user: WebUser) -> ToolExecutor:
             time.sleep(0.1)
         if result.get("error"):
             return ToolResult(ok=False, status="error", message=f"{result['error']} Скажи це коротко.")
+        if result.get("quiet"):
+            return ToolResult(ok=True, status="quiet", message="Мікрофон майже нічого не почув. Скажи коротко й попроси "
+                              "увімкнути музику голосніше чи піднести телефон ближче, а тоді сказати «слухай».")
         if not result.get("found"):
             return ToolResult(ok=True, status="not_found", message="Пісню не впізнано — можливо, надто тихо або це не "
                               "відомий запис. Скажи коротко й запропонуй піднести телефон ближче та спробувати ще раз.")
@@ -677,7 +680,7 @@ def _build_executor(user: WebUser) -> ToolExecutor:
         )
 
     def generate_song(args: dict, ctx: ToolExecutionContext) -> ToolResult:
-        if not music.GEMINI_API_KEY:
+        if not music.providers():
             return ToolResult(ok=False, status="not_configured",
                               message="Генерація музики на сервері не налаштована. Скажи це коротко.")
         prompt = str(args.get("prompt") or "").strip()

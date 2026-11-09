@@ -107,15 +107,18 @@ _CAMERA_NOTE = (
 _MUSIC_NOTE = (
     "\nMusic: you cannot hear music or sing by yourself — the backend can. «що це грає?», «що за пісня?», «впізнай "
     "пісню» go to the backend at once: it listens through the mic for about ten seconds, so say only a short "
-    "«Слухаю…» and then stay silent until it reports. «напиши / згенеруй / створи пісню …» go to the backend at once: "
-    "it starts the song, which is ready in a minute or two in «Музика» — the talk goes on meanwhile; never sing or "
-    "read lyrics yourself. «увімкни пісню …», «увімкни її» go to the backend too. While a song plays you are paused."
+    "«Слухаю…» and then stay silent until it reports. If they only say they are going to put music on, tell them to "
+    "put it on and to say when it plays — listen then, not before. A new song («напиши / створи пісню про …») goes "
+    "to the backend once you know what it is about (a theme, a person, an occasion) or its style; a bare «можеш "
+    "створити пісню?» — ask what about first. It is ready in a minute or two in «Музика» — the talk goes on "
+    "meanwhile; never sing or read lyrics yourself. «увімкни пісню …», «увімкни її» go to the backend too. While a song plays you are paused."
 )
 _MUSIC_BACKEND_NOTE = (
     "\nMusic: recognize_song listens to what plays near the user — call it once per request, never guess a song. "
-    "generate_song starts a new song (you write the prompt and, for a song with words, short original lyrics with "
-    "[Verse] / [Chorus] tags in the user's language); it returns at once — write that it is being written, never the "
-    "lyrics. play_song plays a song from «Музика» by name, or recognized=true for the song just recognised.\n"
+    "generate_song starts a new song — only once the user said what it is about or its style; if they did not, "
+    "do not call it: write a short question asking what the song should be about. You write the prompt and, for a "
+    "song with words, short original lyrics with [Verse] / [Chorus] tags in the user's language. It returns at once — "
+    "write that it is being written, never the lyrics. play_song plays a song from «Музика» by name, or recognized=true for the song just recognised.\n"
 )
 # v5's camera rules, condensed the same way.
 # The characters (all but Кішка) are people: what the backend writes for them is never «як ШІ» either.
@@ -646,7 +649,8 @@ def music_listening(x_client_id: str | None = Header(default=None)) -> dict:
 
 
 @app.post("/api/music/recognize")
-async def music_recognize(request: Request, via: str = "button", x_client_id: str | None = Header(default=None)) -> dict:
+async def music_recognize(request: Request, via: str = "button", x_client_id: str | None = Header(default=None),
+                          x_clip_level: str | None = Header(default=None)) -> dict:
     """A clip of what plays nearby (raw audio body). The result goes to the page and to a waiting recognize_song."""
     user = await asyncio.to_thread(_talker, x_client_id)
     mime = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
@@ -657,6 +661,15 @@ async def music_recognize(request: Request, via: str = "button", x_client_id: st
         raise HTTPException(status_code=400, detail="Порожній запис.")
     if len(data) > music.MAX_CLIP_BYTES:
         raise HTTPException(status_code=413, detail="Запис завеликий.")
+    try:
+        level = float(x_clip_level) if x_clip_level else None
+    except ValueError:
+        level = None
+    if level is not None and level < music.QUIET_LEVEL:
+        logger.info("music.recognize.quiet level=%.5f bytes=%s", level, len(data))
+        result = {"found": False, "quiet": True}
+        user.set_music_result(result)
+        return result
     try:
         result = await asyncio.to_thread(music.recognize, data, mime)
     except music.MusicError as exc:
@@ -690,8 +703,8 @@ class GenerateBody(BaseModel):
 async def music_generate(body: GenerateBody, x_client_id: str | None = Header(default=None)) -> dict:
     """«Створити» in the panel: a song job like generate_song's (she is not told — the panel shows it)."""
     user = await asyncio.to_thread(_talker, x_client_id)
-    if not music.GEMINI_API_KEY:
-        raise HTTPException(status_code=503, detail="Генерація музики не налаштована (немає GEMINI_API_KEY на сервері).")
+    if not music.providers():
+        raise HTTPException(status_code=503, detail="Генерація музики не налаштована (немає OPENROUTER_API_KEY чи GEMINI_API_KEY на сервері).")
     prompt, lyrics = body.prompt.strip(), body.lyrics.strip()
     if not prompt and not lyrics:
         raise HTTPException(status_code=400, detail="Опишіть пісню: про що, у якому стилі.")
