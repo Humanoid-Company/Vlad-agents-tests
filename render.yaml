@@ -42,6 +42,8 @@ services:
         sync: false
       - key: ELEVENLABS_LENGTH_S # song length, seconds (10–300; 0 = the model decides); shorter = cheaper
         value: "60"
+      - key: MUSIC_BY_VOICE # «Музика» by voice (recognize/generate/play): off, the panel only; true brings it back
+        value: "false"
       - key: MUSIC_MODELS # the fallback chain, comma-separated «openrouter:<model>» / «gemini:<model>»
         value: openrouter:google/lyria-3-pro-preview:free,openrouter:google/lyria-3-pro-preview,gemini:lyria-3.5,elevenlabs:music_v1
       - key: LYRIA_MODEL # lyria-3.5 (full songs) or lyria-3-clip-preview (30 s, faster)

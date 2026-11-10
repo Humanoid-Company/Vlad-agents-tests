@@ -76,6 +76,9 @@ logger = logging.getLogger("server")
 PUBLIC_BACKEND_URL = os.getenv("PUBLIC_BACKEND_URL", "http://localhost:8000").rstrip("/")
 FRONTEND_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("FRONTEND_ORIGINS", "*").split(",") if o.strip()]
 SERVER_STARTED_AT = time.time()
+# Music by voice (recognize_song / generate_song / play_song and the notes about them) is off: «Музика» works from
+# the panel only. MUSIC_BY_VOICE=true brings the voice tools back.
+MUSIC_BY_VOICE = os.getenv("MUSIC_BY_VOICE", "false").strip().lower() in ("1", "true", "yes")
 # The hidden /logs page reads whole conversations: only with this token (unset = logs can't be read).
 LOGS_TOKEN = os.getenv("LOGS_TOKEN", "").strip()
 # Cap on one Live session (cost guard: a tab left open in a noisy room kept a call going). 10 min, not 30: a
@@ -267,7 +270,7 @@ def _session_config(user: WebUser, *, concierge: bool = False) -> dict:
         + (_CAMERA_NOTE_V5 if user.prompt_variant == "v5" else _CAMERA_NOTE)
         + (_SCENE_NOTE if CAMERA_SCENE_CONTEXT else "")
         + _PEOPLE_NOTE
-        + _MUSIC_NOTE
+        + (_MUSIC_NOTE if MUSIC_BY_VOICE else "")
         + standing,
         "audio": {"output": {"voice": api_voice(voice, voice in user.old_voices)}},
         "delegation": responses_delegation(
@@ -276,9 +279,10 @@ def _session_config(user: WebUser, *, concierge: bool = False) -> dict:
             + knowledge.PEOPLE_NOTE
             + (VOICE_PERSONAS[voice].backend_note if voice in VOICE_PERSONAS else "")
             + (_PERSON_BACKEND_NOTE if voice in VOICE_PERSONAS else "")
-            + _MUSIC_BACKEND_NOTE
+            + (_MUSIC_BACKEND_NOTE if MUSIC_BY_VOICE else "")
             + knowledge.pinned_note(backend=True, character=user.character),
-            tools=[*LIVE_BACKEND_TOOLS, LOOK_AT_CAMERA_TOOL, KNOWLEDGE_LOOKUP_TOOL, REMEMBER_PERSON_TOOL, *MUSIC_TOOLS],
+            tools=[*LIVE_BACKEND_TOOLS, LOOK_AT_CAMERA_TOOL, KNOWLEDGE_LOOKUP_TOOL, REMEMBER_PERSON_TOOL,
+                   *(MUSIC_TOOLS if MUSIC_BY_VOICE else [])],
             parallel_tools=OPENAI_LIVE_PARALLEL_TOOLS,
             effort=OPENAI_LIVE_BACKEND_EFFORT,
         ),

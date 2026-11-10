@@ -300,7 +300,14 @@ def test_play_the_recognised_song_preview():
     assert by_name.ok and user.music_action["type"] == "preview"
 
 
-def test_music_tools_are_in_her_call_not_the_concierges():
+def test_music_by_voice_is_off_by_default():
+    config = web_app._session_config(_user())
+    assert "Music:" not in config["instructions"]
+    assert not any(t["name"] in str(config["delegation"]) for t in MUSIC_TOOLS)
+
+
+def test_music_tools_are_in_her_call_not_the_concierges(monkeypatch):
+    monkeypatch.setattr(web_app, "MUSIC_BY_VOICE", True)
     user = _user()
     config = web_app._session_config(user)
     assert "Music:" in config["instructions"]
