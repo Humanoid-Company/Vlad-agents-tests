@@ -56,11 +56,6 @@ _MUMBLE_QUIET_S = 1.0
 # The user's own request may still be transcribed this long after the work started.
 _MUMBLE_INPUT_GRACE_S = 1.5
 _MUMBLE_TOOLS = frozenset({"web_search"})
-# Work she must not talk over: recognize_song records the music nearby through the mic, so no thinking aloud then.
-_QUIET_TOOLS = frozenset({"recognize_song"})
-# A note to say «when she is quiet» (a song is ready): after this much silence, and given up after this long.
-_SAY_QUIET_S = 2.0
-_SAY_MAX_WAIT_S = 90.0
 # Her transcript runs well ahead of her audio: a long answer (a full camera description) is all text
 # within a second or two and then plays for many more, so «no new text for 4 s» came mid-sentence —
 # prod: «…сидить у чорному кріслі. ДивитьсяДивлюсь.», the progress line cutting her off. The page
@@ -219,16 +214,6 @@ class SidebandToolBridge:
         await self._connection.session.commentary.append(
             content=text, delegation_id=None, event_id=f"comment_{uuid.uuid4().hex[:8]}"
         )
-
-    async def say_when_quiet(self, text: str, *, quiet_s: float = _SAY_QUIET_S,
-                             max_wait_s: float = _SAY_MAX_WAIT_S) -> None:
-        """say() once she has been silent quiet_s and no tool runs — never over her own answer."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + max_wait_s
-        while self.is_open and loop.time() < deadline and (self._quiet_for(loop.time()) < quiet_s or self.busy):
-            await asyncio.sleep(0.25)
-        if self.is_open and loop.time() < deadline:
-            await self.say(text)
 
     async def think(self, text: str) -> None:
         """Quiet context she knows but does not say now (the camera's scene line)."""
@@ -412,8 +397,6 @@ class SidebandToolBridge:
                     stale_after = min(stale_after, search[0])
                 if not self.is_open or key not in self._work or self._last_input_at > stale_after:
                     return
-                if any(name in _QUIET_TOOLS for name in self._work[key]):
-                    continue  # the page is listening to music: she keeps quiet until the answer
                 if said == 0 and search is not None:
                     next_at = min(next_at, search[0] + _MUMBLE_SEARCH_FIRST_S)
                 if now >= next_at and self._quiet_for(now) >= _MUMBLE_QUIET_S:

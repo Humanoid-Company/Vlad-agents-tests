@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 from config import CAMERA_LOOK_MODE, CAMERA_SCENE_CONTEXT, TIMEZONE, WEB_SEARCH_MAX_CALLS_PER_TURN
 from integrations.web_search import WebSearchRateLimiter
-from server import checkins, conversations, guests, knowledge, music, songs
+from server import checkins, conversations, guests, knowledge
 from server.db import StoreError
 from server.vision import SceneWatcher, VisionError, vision
 from tools.executor import ToolExecutionContext, ToolExecutor
@@ -60,17 +60,6 @@ FRAME_WAIT_S = 2.5
 # …and without it (an old cached page, a lost upload) takes the page's latest periodic frame if it is
 # no older than this.
 FRAME_FALLBACK_S = 6.0
-# Music (recognize_song): the page starts recording when it sees the call (or a moment before, at the start of the
-# work) and posts the clip ~10 s later. A clip from this long before the call still counts…
-MUSIC_EARLY_S = 2.0
-# …the page must say it started listening within this long (an old cached page never does)…
-MUSIC_LISTEN_START_S = 5.0
-# …and the result is waited for this long in all (the clip, the upload and the lookup).
-MUSIC_RESULT_WAIT_S = 25.0
-# «увімкни її» after a recognition: the preview of a song named this long ago at most.
-MUSIC_RECENT_S = 30 * 60.0
-# A play request the page has not picked up in this long is stale (the page was closed).
-MUSIC_ACTION_TTL_S = 30.0
 
 
 @dataclass
@@ -120,12 +109,6 @@ class WebUser:
     camera_on: bool = False
     camera_frame: bytes | None = None
     camera_frame_at: float = 0.0
-    # «Музика» (server/music.py): when the page last started listening, what it heard (or the error), and a song
-    # Єва asked the page to play (play_song), which the page fetches (/api/music/action).
-    music_listening_at: float = 0.0
-    music_result: dict | None = None
-    music_result_at: float = 0.0
-    music_action: dict | None = None
     # The scene line (server/vision.py): what a quick glance saw when the view last changed.
     scene: SceneWatcher = field(init=False)
 
@@ -186,43 +169,6 @@ class WebUser:
                     await bridge.think("[камера вимкнена] Що зараз видно — невідомо; попередні рядки «[камера]» вже не чинні.")
                 except Exception:
                     logger.debug("camera_off_note failed", exc_info=True)
-
-    async def say_when_quiet(self, text: str) -> None:
-        """Something to tell the user once she has finished (a song is ready): she says it in her own words."""
-        for bridge in list(self.bridges):
-            try:
-                await bridge.say_when_quiet(text)
-            except Exception:
-                logger.debug("say_when_quiet failed", exc_info=True)
-
-    async def think_note(self, text: str) -> None:
-        """Quiet context for the open calls (what the panel recognised): she knows it, says it only when asked."""
-        for bridge in list(self.bridges):
-            try:
-                await bridge.think(text)
-            except Exception:
-                logger.debug("think_note failed", exc_info=True)
-
-    def set_music_result(self, result: dict) -> None:
-        self.music_result, self.music_result_at = result, time.time()
-
-    def take_music_action(self) -> dict | None:
-        action, self.music_action = self.music_action, None
-        if action and time.time() - action.get("at", 0) <= MUSIC_ACTION_TTL_S:
-            return action
-        return None
-
-    async def song_ready(self, job: music.MusicJob) -> None:
-        """A song she was asked to write is done (or failed): she tells the user when there is a pause."""
-        if job.via != "voice":
-            return  # written from the panel: the panel shows it, she does not interrupt for it
-        if job.status == "done":
-            text = (f"Note, not a message from the user: the song «{job.song_name}» you were asked to write is ready "
-                    "and is in «Музика». Tell them in one short sentence, in your own words, and ask whether to play it.")
-        else:
-            text = (f"Note, not a message from the user: the song «{job.title}» could not be written: {job.error} "
-                    "Tell them in one short sentence, in your own words.")
-        await self.say_when_quiet(text)
 
     def must_keep_session(self) -> bool:
         """A pause closes the Live session after 15 s (web/config.js) — but not while a tool still runs in it."""
@@ -641,107 +587,6 @@ def _build_executor(user: WebUser) -> ToolExecutor:
             message=f"Гостя підтверджено й відмічено: {name}. Коротко привітай на ім'я і скажи «Проходьте, будь ласка» — без питань і розпитувань.",
         )
 
-    def recognize_song(args: dict, ctx: ToolExecutionContext) -> ToolResult:
-        if not music.AUDD_API_TOKEN:
-            return ToolResult(ok=False, status="not_configured",
-                              message="Розпізнавання музики на сервері не налаштоване. Скажи це коротко.")
-        called_at = time.time()
-        since = called_at - MUSIC_EARLY_S
-        if ctx.extras.get("work_started_at"):
-            since = min(since, ctx.extras["work_started_at"])
-        start_deadline = time.monotonic() + MUSIC_LISTEN_START_S
-        deadline = time.monotonic() + MUSIC_RESULT_WAIT_S
-        while True:  # runs in a worker thread: waiting here never stalls the call
-            result = user.music_result
-            if result is not None and user.music_result_at >= since:
-                break
-            now = time.monotonic()
-            if user.music_listening_at < since and now >= start_deadline:
-                return ToolResult(ok=False, status="no_listen", message="Сторінка не змогла послухати. Скажи коротко й "
-                                  "попроси натиснути «Слухати» в панелі «Музика».")
-            if now >= deadline:
-                return ToolResult(ok=False, status="timeout", message="Не вдалося дослухати. Скажи коротко й запропонуй "
-                                  "спробувати ще раз.")
-            time.sleep(0.1)
-        if result.get("error"):
-            return ToolResult(ok=False, status="error", message=f"{result['error']} Скажи це коротко.")
-        if result.get("quiet"):
-            return ToolResult(ok=True, status="quiet", message="Мікрофон майже нічого не почув. Скажи коротко й попроси "
-                              "увімкнути музику голосніше чи піднести телефон ближче, а тоді сказати «слухай».")
-        if not result.get("found"):
-            return ToolResult(ok=True, status="not_found", message="Пісню не впізнано — можливо, надто тихо або це не "
-                              "відомий запис. Скажи коротко й запропонуй піднести телефон ближче та спробувати ще раз.")
-        what = music.describe(result)
-        tail = " Можеш запропонувати увімкнути уривок." if result.get("preview_url") else ""
-        return ToolResult(
-            ok=True, status="ok",
-            message=f"Це {what}. Скажи назву й виконавця своїми словами, коротко; посилання вже в панелі «Музика».{tail}",
-            data={k: result.get(k) for k in ("title", "artist", "album", "release_date")},
-        )
-
-    def generate_song(args: dict, ctx: ToolExecutionContext) -> ToolResult:
-        if not music.providers():
-            return ToolResult(ok=False, status="not_configured",
-                              message="Генерація музики на сервері не налаштована. Скажи це коротко.")
-        prompt = str(args.get("prompt") or "").strip()
-        lyrics = str(args.get("lyrics") or "").strip()
-        instrumental = bool(args.get("instrumental"))
-        if not prompt and not lyrics:
-            return ToolResult(ok=False, status="needs_more_info", message="Спитай, про що пісня і в якому стилі.")
-        title = music.song_title(str(args.get("title") or ""), prompt)
-        try:
-            job = music.jobs.start(user.client_id, title=title, prompt=prompt, via="voice")
-        except music.MusicError as exc:
-            return ToolResult(ok=False, status=exc.code, message=exc.message + " Скажи це коротко.")
-        task = asyncio.get_running_loop().create_task(
-            music.run_job(job, prompt, lyrics, instrumental, notify=user.song_ready)
-        )
-        _background.add(task)
-        task.add_done_callback(_background.discard)
-        return ToolResult(
-            ok=True, status="started",
-            message=f"Пісня «{title}» пишеться: буде готова приблизно за хвилину-дві й з'явиться в «Музиці», тоді я "
-            "скажу. Скажи це коротко своїми словами — розмова тим часом іде далі як завжди. Не співай і не читай текст.",
-            data={"job_id": job.id, "title": title},
-        )
-
-    def play_song(args: dict, ctx: ToolExecutionContext) -> ToolResult:
-        query = str(args.get("name") or "").strip()
-        last = user.music_result if (user.music_result and user.music_result.get("found")
-                                     and time.time() - user.music_result_at <= MUSIC_RECENT_S) else None
-        wants_last = bool(args.get("recognized")) or (
-            last is not None and bool(query)
-            and music.match_song(query, [{"name": last.get("title", "")}, {"name": music.describe(last)}]) is not None
-        )
-        shared: list[dict] = []
-        if not wants_last:
-            try:
-                shared = songs.store.list()
-            except StoreError:
-                return ToolResult(ok=False, status="error", message="«Музика» зараз недоступна. Скажи це коротко.")
-            song = music.match_song(query, shared) if query else (shared[0] if len(shared) == 1 else None)
-            if song is not None:
-                user.music_action = {"type": "play", "song_id": song["id"], "name": song["name"], "at": time.time(),
-                                     "id": uuid.uuid4().hex}
-                return ToolResult(ok=True, status="ok", message=f"Вмикаю «{song['name']}». Скажи одним коротким "
-                                  "реченням, що вмикаєш; поки грає пісня, ти на паузі й нічого не чуєш.")
-            if query or last is None:  # a name that is not in «Музика» never falls back to another song
-                if not shared:
-                    return ToolResult(ok=False, status="empty", message="У «Музиці» ще немає пісень. Скажи це коротко.")
-                names = ", ".join(f"«{s['name']}»" for s in shared[:10])
-                return ToolResult(ok=False, status="needs_more_info",
-                                  message=f"Такої пісні в «Музиці» немає. Є: {names}. Спитай, яку увімкнути.")
-        if last is None:
-            return ToolResult(ok=False, status="nothing_recognized",
-                              message="Нещодавно впізнаної пісні немає. Спитай, яку саме увімкнути.")
-        if not last.get("preview_url"):
-            return ToolResult(ok=False, status="no_preview", message=f"Уривка {music.describe(last)} немає — посилання "
-                              "на Spotify, Apple Music і YouTube у панелі «Музика». Скажи це коротко.")
-        user.music_action = {"type": "preview", "url": last["preview_url"], "name": music.describe(last),
-                             "at": time.time(), "id": uuid.uuid4().hex}
-        return ToolResult(ok=True, status="ok", message=f"Вмикаю уривок (30 секунд): {music.describe(last)}. Скажи "
-                          "одним коротким реченням, що вмикаєш; поки грає, ти на паузі й нічого не чуєш.")
-
     executor.register("set_assistant_name", set_name)
     executor.register("change_language", change_language)
     executor.register("set_voice_style", set_voice_style)
@@ -752,9 +597,6 @@ def _build_executor(user: WebUser) -> ToolExecutor:
     executor.register("remember_person", remember_person, run_in_thread=True)  # database
     executor.register("find_guest", find_guest, run_in_thread=True)  # database
     executor.register("confirm_guest", confirm_guest, run_in_thread=True)
-    executor.register("recognize_song", recognize_song, run_in_thread=True)  # waits for the page's clip
-    executor.register("generate_song", generate_song)  # starts a job on the event loop and returns at once
-    executor.register("play_song", play_song, run_in_thread=True)  # database
     return executor
 
 

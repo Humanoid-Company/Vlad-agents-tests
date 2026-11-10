@@ -20,8 +20,6 @@
         <p class="sub">Оберіть персонажа й говоріть з ним як з людиною.</p>
       </div>
       <nav class="head-links" aria-label="Сторінки">
-        <button id="musicBtn" class="nav-btn music-btn" type="button" aria-expanded="false" aria-controls="musicCard"
-          title="Музика: пісні, Шазам, створити пісню"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span class="wide-only">Музика</span><span id="musicBadge" class="music-badge" hidden></span></button>
         <a id="knowledgeLink" class="nav-btn" href="knowledge.html" hidden
           title="Список гостей і факти про подію для консьєржа: завантажити таблицю чи документ"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/></svg><span>Знання</span></a>
         <a id="settingsLink" class="nav-btn" href="settings.html" aria-label="Налаштування"
@@ -91,58 +89,24 @@
       <p id="wakeHint" class="hint">Покличте помічника на ім'я — «…, скажи», «Привіт, …». «Дякую, …» — пауза.</p>
     </section>
 
-    <section id="musicCard" class="card" hidden>
+    <section id="musicCard" class="card">
       <div class="card-head">
         <h2>Музика</h2>
-        <button id="musicClose" class="btn ghost small-btn" type="button" aria-label="Закрити панель «Музика»">✕</button>
+        <label class="btn ghost small-btn file-btn" for="songFile">Додати пісню</label>
       </div>
-      <nav class="mode-tabs music-tabs" role="tablist" aria-label="Музика">
-        <button type="button" role="tab" data-music-tab="songs" aria-selected="true" aria-controls="musicSongs">Пісні</button>
-        <button type="button" role="tab" data-music-tab="shazam" aria-selected="false" aria-controls="musicShazam">Шазам</button>
-        <button type="button" role="tab" data-music-tab="create" aria-selected="false" aria-controls="musicCreate">Створити</button>
-      </nav>
-
-      <div id="musicSongs" role="tabpanel" data-music-panel="songs">
-        <!-- Extensions and audio types, not «audio/*»: with the wildcard iOS offers the photo library and the camera first. -->
-        <input id="songFile" type="file" accept=".mp3,.m4a,.aac,.wav,.ogg,.opus,.flac,audio/mpeg,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,audio/flac" multiple hidden>
-        <div class="row song-row">
-          <select id="songSelect" aria-label="Пісня" disabled><option>Пісень ще немає</option></select>
-          <button id="songPlay" class="btn primary" type="button" disabled>▶ Увімкнути</button>
-          <button id="songDelete" class="btn ghost" type="button" disabled>Видалити</button>
-        </div>
-        <div class="song-seek">
-          <span id="songTime" class="muted small">0:00</span>
-          <input id="songSeek" type="range" min="0" max="0" step="1" value="0" aria-label="Позиція в пісні" disabled>
-          <span id="songDuration" class="muted small">0:00</span>
-        </div>
-        <label class="btn ghost small-btn file-btn song-add" for="songFile">Додати пісню з файлу</label>
-        <p id="songInfo" class="hint">Пісні спільні для всіх пристроїв і людей: додали з ноутбука — є й на телефоні колеги. Поки грає пісня, помічник на паузі й мовчить, мікрофон вимкнено. Увімкнути можна кнопкою або голосом — «…, увімкни …». Якщо розмова ще йде, пісня чекає 5 секунд тиші.</p>
+      <!-- Extensions and audio types, not «audio/*»: with the wildcard iOS offers the photo library and the camera first. -->
+      <input id="songFile" type="file" accept=".mp3,.m4a,.aac,.wav,.ogg,.opus,.flac,audio/mpeg,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,audio/flac" multiple hidden>
+      <div class="row song-row">
+        <select id="songSelect" aria-label="Пісня" disabled><option>Пісень ще немає</option></select>
+        <button id="songPlay" class="btn primary" type="button" disabled>▶ Увімкнути</button>
+        <button id="songDelete" class="btn ghost" type="button" disabled>Видалити</button>
       </div>
-
-      <div id="musicShazam" role="tabpanel" data-music-panel="shazam" hidden>
-        <button id="shazamBtn" class="btn primary big shazam-btn" type="button">🎧 Слухати</button>
-        <p id="shazamStatus" class="hint">Піднесіть телефон до музики — послухаю 10 секунд і скажу, що це. Або голосом: «…, що це грає?»</p>
-        <div id="shazamResult" class="track-card" hidden></div>
-        <div id="shazamHistoryBlock" hidden>
-          <h3 class="music-sub">Нещодавно впізнані</h3>
-          <ul id="shazamHistory" class="track-history"></ul>
-        </div>
+      <div class="song-seek">
+        <span id="songTime" class="muted small">0:00</span>
+        <input id="songSeek" type="range" min="0" max="0" step="1" value="0" aria-label="Позиція в пісні" disabled>
+        <span id="songDuration" class="muted small">0:00</span>
       </div>
-
-      <div id="musicCreate" role="tabpanel" data-music-panel="create" hidden>
-        <label class="block-label" for="genPrompt">Яка пісня</label>
-        <textarea id="genPrompt" rows="2" maxlength="1500"
-          placeholder="Весела поп-пісня про осінній Львів, жіночий вокал, гітара, бадьорий темп"></textarea>
-        <label class="block-label" for="genLyrics">Текст <span class="muted small">(необов'язково)</span></label>
-        <textarea id="genLyrics" rows="4" maxlength="4000" placeholder="[Verse]&#10;…&#10;[Chorus]&#10;…"></textarea>
-        <div class="row gen-row">
-          <input id="genTitle" type="text" maxlength="80" placeholder="Назва (необов'язково)" aria-label="Назва пісні">
-          <label class="gen-check"><input id="genInstrumental" type="checkbox"> Без вокалу</label>
-        </div>
-        <button id="genBtn" class="btn primary wide" type="button">Створити пісню</button>
-        <p id="genInfo" class="hint">Пісня пишеться хвилину-дві й з'являється у «Піснях» — для всіх. Або голосом: «…, напиши пісню про …».</p>
-        <ul id="genJobs" class="gen-jobs"></ul>
-      </div>
+      <p id="songInfo" class="hint">Пісні спільні для всіх пристроїв і людей: додали з ноутбука — є й на телефоні колеги. Поки грає пісня, помічник на паузі й мовчить, мікрофон вимкнено. Пісню вмикають і обирають тільки кнопками тут, голосом — ні. Якщо розмова ще йде, пісня чекає 5 секунд тиші.</p>
     </section>
 
     <section id="conversation" class="card">
