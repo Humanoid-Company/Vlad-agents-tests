@@ -427,3 +427,31 @@ def test_she_asks_what_the_song_is_about_first():
     assert "можеш створити пісню?" in GENERATE_SONG_TOOL["description"]
     assert "going to put it on" in RECOGNIZE_SONG_TOOL["description"]
     assert "ask what about first" in web_app._MUSIC_NOTE and "do not call it" in web_app._MUSIC_BACKEND_NOTE
+
+
+def test_elevenlabs_writes_the_song_when_the_others_run_out(monkeypatch):
+    monkeypatch.setattr(music, "ELEVENLABS_API_KEY", "el-test")
+    monkeypatch.setattr(music, "ELEVENLABS_LENGTH_S", 45)
+    monkeypatch.setattr(music, "MUSIC_MODELS", "openrouter:google/lyria-3-pro-preview:free,elevenlabs:music_v1")
+    audio = b"ID3" + b"\x00" * 64
+    transport, seen = _route({
+        "openrouter.ai": lambda r: httpx.Response(429, json={"error": {"message": "limit: 0 requests per day"}}),
+        "api.elevenlabs.io": lambda r: httpx.Response(200, content=audio, headers={"content-type": "audio/mpeg"}),
+    })
+    _use(monkeypatch, transport)
+    mime, data, _, who = asyncio.run(music.generate("весела поп-пісня", "[Verse] Собаки", False))
+    assert data == audio and mime == "audio/mpeg" and who == "music_v1 (ElevenLabs)"
+    url, sent = next(item for item in seen if "elevenlabs" in item[0])
+    assert sent["model_id"] == "music_v1" and sent["music_length_ms"] == 45000 and "Собаки" in sent["prompt"]
+    assert "output_format=mp3_44100_128" in url
+
+
+def test_elevenlabs_free_plan_without_music_is_a_clear_message(monkeypatch):
+    monkeypatch.setattr(music, "ELEVENLABS_API_KEY", "el-test")
+    monkeypatch.setattr(music, "MUSIC_MODELS", "elevenlabs:music_v1")
+    transport, _ = _route({"api.elevenlabs.io": lambda r: httpx.Response(402, json={"detail": {
+        "status": "payment_required", "message": "Music requires a paid subscription"}})})
+    _use(monkeypatch, transport)
+    with pytest.raises(music.MusicError) as err:
+        asyncio.run(music.generate("pop", "", False))
+    assert "ElevenLabs" in err.value.message and "кредит" in err.value.message

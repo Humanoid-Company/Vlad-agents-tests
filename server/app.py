@@ -704,7 +704,7 @@ async def music_generate(body: GenerateBody, x_client_id: str | None = Header(de
     """«Створити» in the panel: a song job like generate_song's (she is not told — the panel shows it)."""
     user = await asyncio.to_thread(_talker, x_client_id)
     if not music.providers():
-        raise HTTPException(status_code=503, detail="Генерація музики не налаштована (немає OPENROUTER_API_KEY чи GEMINI_API_KEY на сервері).")
+        raise HTTPException(status_code=503, detail="Генерація музики не налаштована (немає OPENROUTER_API_KEY, GEMINI_API_KEY чи ELEVENLABS_API_KEY на сервері).")
     prompt, lyrics = body.prompt.strip(), body.lyrics.strip()
     if not prompt and not lyrics:
         raise HTTPException(status_code=400, detail="Опишіть пісню: про що, у якому стилі.")

@@ -54,13 +54,22 @@ LYRIA_TIMEOUT_S = float(os.getenv("LYRIA_TIMEOUT_S", "300"))
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_URL = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions")
 OPENROUTER_AUDIO_FORMAT = os.getenv("OPENROUTER_AUDIO_FORMAT", "mp3").strip().lower()
+# ElevenLabs Music (https://elevenlabs.io/docs/api-reference/music/compose): full songs with vocals, one POST that
+# returns the audio. The free plan's 10 000 credits a month are a few songs; ELEVENLABS_LENGTH_S keeps them short
+# (10–300 s, 0 = the model decides).
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
+ELEVENLABS_URL = os.getenv("ELEVENLABS_URL", "https://api.elevenlabs.io/v1/music")
+ELEVENLABS_LENGTH_S = int(os.getenv("ELEVENLABS_LENGTH_S", "60"))
+ELEVENLABS_FORMAT = os.getenv("ELEVENLABS_FORMAT", "mp3_44100_128")
+ELEVENLABS_MAX_PROMPT = 4000
 _MIME = {"mp3": "audio/mpeg", "wav": "audio/wav", "flac": "audio/flac", "opus": "audio/ogg", "pcm16": "audio/wav"}
 # The order songs are tried in: «openrouter:<model>» or «gemini:<model>», comma-separated. When one runs out (the free
 # daily limit, no credits) the next one writes the song. Only those whose key is set count. The paid OpenRouter Pro is
 # $0.08 a song and works only with credits on the account; the Clip (google/lyria-3-clip-preview) is $0.04, 30 s.
 MUSIC_MODELS = os.getenv(
     "MUSIC_MODELS",
-    f"openrouter:google/lyria-3-pro-preview:free,openrouter:google/lyria-3-pro-preview,gemini:{LYRIA_MODEL}",
+    f"openrouter:google/lyria-3-pro-preview:free,openrouter:google/lyria-3-pro-preview,gemini:{LYRIA_MODEL},"
+    "elevenlabs:music_v1",
 )
 MAX_PROMPT_CHARS = 1500
 MAX_LYRICS_CHARS = 4000
@@ -228,11 +237,13 @@ def providers() -> list[tuple[str, str]]:
             chain.append(("openrouter", model))
         elif kind == "gemini" and GEMINI_API_KEY:
             chain.append(("gemini", model or LYRIA_MODEL))
+        elif kind == "elevenlabs" and ELEVENLABS_API_KEY:
+            chain.append(("elevenlabs", model or "music_v1"))
     return chain
 
 
 def short_label(kind: str, model: str) -> str:
-    return model.split("/")[-1] + (" (OpenRouter)" if kind == "openrouter" else " (Gemini)")
+    return model.split("/")[-1] + {"openrouter": " (OpenRouter)", "elevenlabs": " (ElevenLabs)"}.get(kind, " (Gemini)")
 
 
 # A model that has run out is skipped for a while, so a song never waits for its refusal first: a daily limit until
@@ -413,6 +424,39 @@ async def _gemini(model: str, text_in: str) -> tuple[str, bytes, str]:
     return parse_lyria(body)
 
 
+async def _elevenlabs(model: str, prompt: str, lyrics: str, instrumental: bool) -> tuple[str, bytes, str]:
+    """ElevenLabs Music: the description and the lyrics in one prompt; the answer is the audio itself."""
+    who = short_label("elevenlabs", model)
+    text_in = lyria_input(prompt, lyrics, instrumental)[:ELEVENLABS_MAX_PROMPT]
+    body: dict[str, Any] = {"prompt": text_in, "model_id": model}
+    if instrumental:
+        body["force_instrumental"] = True
+    if ELEVENLABS_LENGTH_S:
+        body["music_length_ms"] = max(10, min(300, ELEVENLABS_LENGTH_S)) * 1000
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(LYRIA_TIMEOUT_S, connect=15.0)) as http:
+            response = await http.post(
+                ELEVENLABS_URL, params={"output_format": ELEVENLABS_FORMAT},
+                headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"}, json=body,
+            )
+    except httpx.TimeoutException as exc:
+        raise MusicError("timeout", f"{who}: пісня писалася задовго.") from exc
+    except httpx.HTTPError as exc:
+        logger.warning("music.generate.unavailable who=%s detail=%s", who, exc)
+        raise MusicError("unavailable", f"{who}: сервіс не відповідає.") from exc
+    if response.status_code >= 400:
+        text = response.text
+        low = text.lower()
+        if response.status_code == 402 or "quota_exceeded" in low or "credits" in low:
+            raise MusicError("no_credits", f"{who}: закінчились кредити (місячний ліміт).")
+        if response.status_code in (401, 403) and ("paid" in low or "plan" in low or "subscription" in low):
+            raise MusicError("no_credits", f"{who}: музика недоступна на безкоштовному плані.")
+        raise _http_error(response.status_code, response.content, who)
+    if not response.content:
+        raise MusicError("no_audio", f"{who}: модель не повернула аудіо.")
+    return sniff_mime(response.content, _MIME.get(ELEVENLABS_FORMAT.split("_")[0], "audio/mpeg")), response.content, ""
+
+
 _REASONS = {"quota": "ліміт вичерпано", "no_credits": "немає кредитів", "auth": "ключ не підходить",
             "no_model": "модель недоступна", "unavailable": "не відповідає", "timeout": "задовго",
             "no_audio": "не повернула аудіо"}
@@ -424,7 +468,7 @@ def _all_failed(failures: list[tuple[str, MusicError]]) -> MusicError:
         return refused
     parts = [f"{who} — {_REASONS.get(exc.code, exc.message)}" for who, exc in failures]
     code = "quota" if any(exc.code in ("quota", "no_credits") for _, exc in failures) else failures[-1][1].code
-    tail = (" Безкоштовний ліміт закінчився — він оновлюється щодня; або поповніть кредити OpenRouter."
+    tail = (" Безкоштовний ліміт закінчився — він оновлюється щодня; або поповніть кредити OpenRouter чи ElevenLabs."
             if code == "quota" else "")
     return MusicError(code, "Не вдалося написати пісню жодною моделлю: " + "; ".join(parts) + "." + tail)
 
@@ -433,8 +477,8 @@ async def generate(prompt: str, lyrics: str = "", instrumental: bool = False) ->
     """(mime, audio, lyrics text, which model wrote it): the chain in order, the next model when one runs out."""
     chain = providers()
     if not chain:
-        raise MusicError("not_configured", "Генерація музики не налаштована (немає OPENROUTER_API_KEY чи "
-                         "GEMINI_API_KEY на сервері).")
+        raise MusicError("not_configured", "Генерація музики не налаштована (немає OPENROUTER_API_KEY, "
+                         "GEMINI_API_KEY чи ELEVENLABS_API_KEY на сервері).")
     text_in = lyria_input(prompt, lyrics, instrumental)
     # Models that ran out a moment ago go last: tried only if every other one fails too.
     ordered = [p for p in chain if not _cooling(f"{p[0]}:{p[1]}")] + [p for p in chain if _cooling(f"{p[0]}:{p[1]}")]
@@ -443,7 +487,12 @@ async def generate(prompt: str, lyrics: str = "", instrumental: bool = False) ->
         label, who = f"{kind}:{model}", short_label(kind, model)
         started = time.monotonic()
         try:
-            mime, data, text = await (_openrouter(model, text_in) if kind == "openrouter" else _gemini(model, text_in))
+            if kind == "elevenlabs":
+                mime, data, text = await _elevenlabs(model, prompt, lyrics, instrumental)
+            elif kind == "openrouter":
+                mime, data, text = await _openrouter(model, text_in)
+            else:
+                mime, data, text = await _gemini(model, text_in)
         except MusicError as exc:
             logger.warning("music.generate.next from=%s code=%s detail=%s", label, exc.code, exc.message[:200])
             _cool(label, exc)

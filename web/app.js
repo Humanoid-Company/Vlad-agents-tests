@@ -2696,7 +2696,7 @@
     $("shazamBtn").disabled = !musicUi.status.recognize;
     $("genBtn").disabled = !musicUi.status.generate;
     if (!musicUi.status.recognize) shazamNote("Розпізнавання музики ще не налаштоване на сервері (потрібен ключ AudD).");
-    if (!musicUi.status.generate) genNote("Створення пісень ще не налаштоване на сервері (потрібен ключ OpenRouter або Gemini).");
+    if (!musicUi.status.generate) genNote("Створення пісень ще не налаштоване на сервері (потрібен ключ OpenRouter, Gemini або ElevenLabs).");
   }
 
   // ── her music tools (the backend's calls, seen on the call's data channel) ──
