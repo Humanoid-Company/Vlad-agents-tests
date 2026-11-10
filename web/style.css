@@ -407,3 +407,7 @@ form.card[hidden], [role="tabpanel"][hidden] { display: none; }
 .gen-jobs .job-state.failed { color: var(--err); }
 .gen-jobs .job-state.done { color: var(--ok); }
 .gen-jobs .btn { flex: 0 0 auto; }
+
+/* «Музика»: the button sits where the old card was, above the panel it opens. */
+.music-entry { margin: 0 0 12px; }
+.music-entry-btn { width: 100%; justify-content: center; padding: 12px 14px; }
