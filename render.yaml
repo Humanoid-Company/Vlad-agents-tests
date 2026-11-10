@@ -26,8 +26,6 @@ services:
         sync: false
       - key: LOGS_TOKEN # password of the hidden /logs page (calls and tool calls); empty = logs are open
         sync: false
-      - key: ROBOT_TOKEN # «Роботи»: optional password for the bridges by the robots (robot_bridge/); empty = any bridge connects
-        sync: false
       - key: TIMEZONE # for «сьогодні» and the time of day in the prompts
         value: Europe/Kyiv
       - key: WEB_SEARCH_API_KEY # Tavily, for the web_search tool; empty = she says search is unavailable
