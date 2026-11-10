@@ -477,7 +477,7 @@
   songs.audio.setAttribute("playsinline", "");
   // The «Музика» panel (header button): which tab, what Шазам found, the songs being written (see initMusicPanel).
   const musicUi = { open: false, tab: store.get("va-music-tab") || "songs",
-    status: { recognize: true, generate: true }, listening: false, track: null, history: [], jobs: [],
+    status: { recognize: true, generate: true }, listening: false, cancelled: false, abort: null, track: null, history: [], jobs: [],
     jobsTimer: null, jobsTick: null, unseen: false, calls: new Set() };
   try { musicUi.history = JSON.parse(store.get("va-shazam") || "[]").slice(0, 8); } catch { musicUi.history = []; }
 
@@ -2382,8 +2382,8 @@
   function showListening(left) {
     const btn = $("shazamBtn");
     btn.classList.toggle("listening", left !== 0);
-    btn.disabled = left !== 0 || !musicUi.status.recognize;
-    btn.textContent = left > 0 ? "Слухаю… " + left + " с" : left < 0 ? "Шукаю, що це…" : "🎧 Слухати";
+    btn.disabled = !musicUi.status.recognize; // while listening or searching the same button stops it
+    btn.textContent = left > 0 ? "■ Зупинити · слухаю " + left + " с" : left < 0 ? "■ Зупинити · шукаю…" : "🎧 Слухати";
     if (left > 0) shazamNote("Тримайте телефон ближче до звуку.");
     showMusicBtn();
   }
@@ -2394,7 +2394,7 @@
       const started = Date.now();
       const timer = setInterval(() => {
         const left = Math.ceil((ms - (Date.now() - started)) / 1000);
-        if (left > 0) { showListening(left); return; }
+        if (left > 0 && !musicUi.cancelled) { showListening(left); return; }
         clearInterval(timer);
         done();
       }, 250);
@@ -2474,7 +2474,7 @@
       const started = Date.now();
       const timer = setInterval(() => {
         const left = Math.ceil((CLIP_MS - (Date.now() - started)) / 1000);
-        if (left > 0) { showListening(left); return; }
+        if (left > 0 && !musicUi.cancelled) { showListening(left); return; }
         clearInterval(timer);
         if (rec.state !== "inactive") rec.stop();
       }, 250);
@@ -2482,8 +2482,17 @@
   }
 
   // via: "button" (the panel) or "voice" (recognize_song is waiting on the server for this clip).
+  // The button while it listens or searches: stop. By voice the server is told, so recognize_song stops waiting.
+  function stopListening() {
+    musicUi.cancelled = true;
+    if (musicUi.abort) musicUi.abort.abort();
+    fetch(BACKEND + "/api/music/cancel", { method: "POST", headers: headers() }).catch(() => {});
+    shazamNote("Зупиняю…");
+  }
+
   async function listenForSong(via) {
-    if (musicUi.listening) return;
+    if (musicUi.listening) { if (via === "button") stopListening(); return; }
+    musicUi.cancelled = false;
     setMusicOpen(true, "shazam");
     if (!musicUi.status.recognize) { shazamNote("Розпізнавання музики ще не налаштоване на сервері (потрібен ключ AudD)."); return; }
     const type = clipType();
@@ -2493,30 +2502,37 @@
     showListening(CLIP_MS / 1000);
     fetch(BACKEND + "/api/music/listening", { method: "POST", headers: headers() }).catch(() => {});
     if (via === "voice") await waitHerQuiet(2500);
+    if (musicUi.cancelled) { musicUi.listening = false; showListening(0); shazamNote("Зупинено."); return; }
     const inCall = eva.mode !== "off";
     if (inCall) holdCallMic(true);
     let stream = null;
     try {
       stream = await openClipMic();
       const wav = canWav ? await recordWav(stream) : null;
+      if (musicUi.cancelled) throw Object.assign(new Error("Зупинено."), { name: "ShazamCancelled" });
       if (!wav && !type) throw new Error("цей браузер не вміє записувати звук");
       const blob = wav ? wav.blob : await recordClip(stream, type);
+      if (musicUi.cancelled) throw Object.assign(new Error("Зупинено."), { name: "ShazamCancelled" });
       showClipBack(blob, wav, stream);
       showListening(-1);
       shazamNote("Шукаю, що це…");
       const sendHeaders = { "Content-Type": blob.type || type, "X-Client-Id": clientId };
       if (wav) sendHeaders["X-Clip-Level"] = wav.level.toFixed(5);
-      const res = await fetch(BACKEND + "/api/music/recognize?via=" + via, { method: "POST", headers: sendHeaders, body: blob });
+      musicUi.abort = new AbortController();
+      const res = await fetch(BACKEND + "/api/music/recognize?via=" + via, { method: "POST", headers: sendHeaders, body: blob, signal: musicUi.abort.signal });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.detail || "помилка " + res.status);
       showTrackResult(body);
     } catch (err) {
-      shazamNote(err && err.name === "NotAllowedError" ? "Браузер не дав мікрофон — дозвольте його й спробуйте ще раз."
+      const stopped = musicUi.cancelled || (err && (err.name === "AbortError" || err.name === "ShazamCancelled"));
+      shazamNote(stopped ? "Зупинено."
+        : err && err.name === "NotAllowedError" ? "Браузер не дав мікрофон — дозвольте його й спробуйте ще раз."
         : "Не вдалося: " + ((err && err.message) || err));
     } finally {
       if (stream) stream.getTracks().forEach((t) => t.stop());
       if (inCall) holdCallMic(false);
       musicUi.listening = false;
+      musicUi.abort = null;
       showListening(0);
     }
   }

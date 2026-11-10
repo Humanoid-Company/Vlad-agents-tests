@@ -455,3 +455,16 @@ def test_elevenlabs_free_plan_without_music_is_a_clear_message(monkeypatch):
     with pytest.raises(music.MusicError) as err:
         asyncio.run(music.generate("pop", "", False))
     assert "ElevenLabs" in err.value.message and "кредит" in err.value.message
+
+
+def test_stopping_the_listening_frees_the_waiting_tool(client):
+    user = _user()
+    user.music_listening_at = time.time()
+
+    def page():  # the user presses «Зупинити» on the page
+        time.sleep(0.3)
+        assert client.post("/api/music/cancel", headers=H).status_code == 200
+    threading.Thread(target=page).start()
+    started = time.monotonic()
+    result = user.executor.execute_sync("recognize_song", {}, _ctx(work_started_at=time.time()))
+    assert result.ok and result.status == "cancelled" and time.monotonic() - started < 2.5

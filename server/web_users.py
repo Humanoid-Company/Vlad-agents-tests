@@ -663,6 +663,9 @@ def _build_executor(user: WebUser) -> ToolExecutor:
                 return ToolResult(ok=False, status="timeout", message="Не вдалося дослухати. Скажи коротко й запропонуй "
                                   "спробувати ще раз.")
             time.sleep(0.1)
+        if result.get("cancelled"):
+            return ToolResult(ok=True, status="cancelled", message="Користувач сам зупинив прослуховування. Скажи "
+                              "коротко, що зупинено, і більше не розпитуй.")
         if result.get("error"):
             return ToolResult(ok=False, status="error", message=f"{result['error']} Скажи це коротко.")
         if result.get("quiet"):

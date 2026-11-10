@@ -648,6 +648,13 @@ def music_listening(x_client_id: str | None = Header(default=None)) -> dict:
     return {"ok": True}
 
 
+@app.post("/api/music/cancel")
+def music_cancel(x_client_id: str | None = Header(default=None)) -> dict:
+    """The user stopped listening on the page: a waiting recognize_song stops waiting."""
+    _user(x_client_id).set_music_result({"cancelled": True})
+    return {"ok": True}
+
+
 @app.post("/api/music/recognize")
 async def music_recognize(request: Request, via: str = "button", x_client_id: str | None = Header(default=None),
                           x_clip_level: str | None = Header(default=None)) -> dict:
