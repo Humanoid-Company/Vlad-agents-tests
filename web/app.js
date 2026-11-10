@@ -2351,7 +2351,14 @@
     const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
     if (micId) raw.deviceId = { ideal: micId };
     try {
-      return await navigator.mediaDevices.getUserMedia({ audio: raw });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: raw });
+      // Chrome can hand back the call's processed capture: ask the track again, and tell what it really is.
+      const track = stream.getAudioTracks()[0];
+      const got = (track && track.getSettings && track.getSettings()) || {};
+      if (track && (got.echoCancellation || got.noiseSuppression || got.autoGainControl) && track.applyConstraints) {
+        await track.applyConstraints(raw).catch(() => {});
+      }
+      return stream;
     } catch (err) {
       if (callTrack) return copy();
       throw err;
@@ -2413,10 +2420,11 @@
     const parts = [];
     let sumSq = 0;
     let count = 0;
+    let peak = 0;
     proc.onaudioprocess = (e) => {
       const data = e.inputBuffer.getChannelData(0);
       parts.push(new Float32Array(data));
-      for (let i = 0; i < data.length; i++) sumSq += data[i] * data[i];
+      for (let i = 0; i < data.length; i++) { sumSq += data[i] * data[i]; const a = Math.abs(data[i]); if (a > peak) peak = a; }
       count += data.length;
     }; // the output stays silent: nothing of the clip is played
     source.connect(proc);
@@ -2432,14 +2440,16 @@
     const samples = new Float32Array(count);
     let at = 0;
     for (const part of parts) { samples.set(part, at); at += part.length; }
+    // A laptop mic hearing speakers is faint (raw: no auto gain): lift it so the loudest peak is ~0.8, at most 25×.
+    const gain = peak > 0.0005 ? Math.min(25, Math.max(1, 0.8 / peak)) : 1;
     const pcm = new Int16Array(Math.floor(count / step));
     for (let i = 0; i < pcm.length; i++) {
       let sum = 0;
       for (let k = 0; k < step; k++) sum += samples[i * step + k];
-      const v = Math.max(-1, Math.min(1, sum / step));
+      const v = Math.max(-1, Math.min(1, (sum / step) * gain));
       pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
     }
-    return { blob: wavBlob(pcm, Math.round(rate / step)), level: Math.sqrt(sumSq / count) };
+    return { blob: wavBlob(pcm, Math.round(rate / step)), level: Math.sqrt(sumSq / count), peak, gain };
   }
 
   function wavBlob(pcm, rate) {
@@ -2491,6 +2501,7 @@
       const wav = canWav ? await recordWav(stream) : null;
       if (!wav && !type) throw new Error("цей браузер не вміє записувати звук");
       const blob = wav ? wav.blob : await recordClip(stream, type);
+      showClipBack(blob, wav, stream);
       showListening(-1);
       shazamNote("Шукаю, що це…");
       const sendHeaders = { "Content-Type": blob.type || type, "X-Client-Id": clientId };
@@ -2508,6 +2519,22 @@
       musicUi.listening = false;
       showListening(0);
     }
+  }
+
+  // What was recorded, to hear for yourself when a song is not found: the clip, its level and what the mic did to it.
+  let clipUrl = "";
+  function showClipBack(blob, wav, stream) {
+    try {
+      const track = stream.getAudioTracks()[0];
+      const st = (track && track.getSettings && track.getSettings()) || {};
+      if (clipUrl) URL.revokeObjectURL(clipUrl);
+      clipUrl = URL.createObjectURL(blob);
+      $("shazamClip").src = clipUrl;
+      const level = wav ? "рівень " + wav.level.toFixed(4) + ", пік " + wav.peak.toFixed(3) + ", підсилення ×" + wav.gain.toFixed(1) : "";
+      const mic = "ехоподавлення " + (st.echoCancellation ? "увімкнене" : "вимкнене") + ", шумодав " + (st.noiseSuppression ? "увімкнений" : "вимкнений");
+      $("shazamClipInfo").textContent = [level, mic, Math.round(blob.size / 1024) + " КБ"].filter(Boolean).join(" · ");
+      $("shazamDebug").hidden = false;
+    } catch { /* the clip is only for a look */ }
   }
 
   function showTrackResult(result) {

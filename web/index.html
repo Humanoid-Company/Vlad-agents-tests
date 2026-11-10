@@ -59,6 +59,11 @@
             <button id="shazamBtn" class="btn primary big shazam-btn" type="button">🎧 Слухати</button>
             <p id="shazamStatus" class="hint">Піднесіть телефон до музики — послухаю 10 секунд і скажу, що це. Або голосом: «…, що це грає?»</p>
             <div id="shazamResult" class="track-card" hidden></div>
+        <details id="shazamDebug" class="shazam-debug" hidden>
+          <summary>Що записалось</summary>
+          <audio id="shazamClip" controls></audio>
+          <p id="shazamClipInfo" class="hint"></p>
+        </details>
             <div id="shazamHistoryBlock" hidden>
               <h3 class="music-sub">Нещодавно впізнані</h3>
               <ul id="shazamHistory" class="track-history"></ul>
