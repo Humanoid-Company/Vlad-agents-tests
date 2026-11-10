@@ -32,19 +32,3 @@ services:
         sync: false
       - key: DATABASE_URL # Neon Postgres for «Знання» (postgresql://…?sslmode=require); empty = a SQLite file every deploy wipes
         sync: false
-      - key: AUDD_API_TOKEN # «Музика» → Шазам (AudD); empty = recognition says it is not set up
-        sync: false
-      - key: OPENROUTER_API_KEY # «Музика» → new songs: Lyria via OpenRouter (free variant first)
-        sync: false
-      - key: GEMINI_API_KEY # «Музика» → new songs: Lyria straight from Gemini, the last in the chain
-        sync: false
-      - key: ELEVENLABS_API_KEY # «Музика» → new songs: ElevenLabs Music (the free plan: 10 000 credits a month)
-        sync: false
-      - key: ELEVENLABS_LENGTH_S # song length, seconds (10–300; 0 = the model decides); shorter = cheaper
-        value: "60"
-      - key: MUSIC_BY_VOICE # «Музика» by voice (recognize/generate/play): off, the panel only; true brings it back
-        value: "false"
-      - key: MUSIC_MODELS # the fallback chain, comma-separated «openrouter:<model>» / «gemini:<model>»
-        value: openrouter:google/lyria-3-pro-preview:free,openrouter:google/lyria-3-pro-preview,gemini:lyria-3.5,elevenlabs:music_v1
-      - key: LYRIA_MODEL # lyria-3.5 (full songs) or lyria-3-clip-preview (30 s, faster)
-        value: lyria-3.5
