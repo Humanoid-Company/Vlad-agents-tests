@@ -358,6 +358,7 @@
       let remoteSource = null;
       return {
         stream,
+        ctx, // already running (started in a tap): Шазам records its clip through it without a tap of its own
         track: out.stream.getAudioTracks()[0],
         // The assistant's audio, measured only (never played from here). A gate kept for the next
         // call (voice switch) drops the old call's audio first.
@@ -471,8 +472,14 @@
   };
 
   const songs = { list: [], current: store.get("va-song") || "", audio: new Audio(), loadedId: "",
-    playing: false, primed: false, pending: false, pendingSince: 0, pendingTimer: null, mutedMic: false, left: null };
+    playing: false, primed: false, pending: false, pendingSince: 0, pendingTimer: null, mutedMic: false, left: null,
+    external: null }; // external: {url, name} — a recognised song's preview playing in the same player
   songs.audio.setAttribute("playsinline", "");
+  // The «Музика» panel (header button): which tab, what Шазам found, the songs being written (see initMusicPanel).
+  const musicUi = { open: store.get("va-music-open") === "1", tab: store.get("va-music-tab") || "songs",
+    status: { recognize: true, generate: true }, listening: false, track: null, history: [], jobs: [],
+    jobsTimer: null, jobsTick: null, unseen: false, calls: new Set() };
+  try { musicUi.history = JSON.parse(store.get("va-shazam") || "[]").slice(0, 8); } catch { musicUi.history = []; }
 
   function showState() {
     const m = eva.mode;
@@ -889,6 +896,11 @@
         const item = inner.item || {};
         if ((inner.type === "response.output_item.added" || inner.type === "response.output_item.done")
             && item.type === "function_call" && item.name === "look_at_camera") snapForLook(item.call_id || item.id);
+        // «Музика»: recognize_song needs this page's mic, play_song a song started here, generate_song a job to watch.
+        if ((inner.type === "response.output_item.added" || inner.type === "response.output_item.done")
+            && item.type === "function_call" && MUSIC_CALLS.has(item.name)) {
+          onMusicCall(item.name, item.call_id || item.id || item.name, inner.type === "response.output_item.done");
+        }
         // «Консьєрж»: the backend says who the guest is once the check question is answered.
         // What the server decided (confirmed, refused without an answer, already let in) is in /api/me.
         if (inner.type === "response.output_item.done" && item.type === "function_call" && item.name === "confirm_guest") {
@@ -2032,8 +2044,8 @@
   }
 
   // ── Музика ──
-  // Songs are shared (the server keeps them): one added on a laptop is there on every phone. They play by the button only
-  // (the picked song only: a song is chosen by hand, never by voice). She must not speak over a song: it
+  // Songs are shared (the server keeps them): one added on a laptop is there on every phone. They play by the button or by
+  // voice (play_song: the server picks the song by name, the page fetches it). She must not speak over a song: it
   // pauses her and turns the mic off — so she hears nothing of it — and both come back when it stops.
   // The list is the server's (server/songs.py): what one device uploads, every device and everyone sees.
   const SONG_MIME = { mp3: "audio/mpeg", m4a: "audio/mp4", aac: "audio/aac", wav: "audio/wav", ogg: "audio/ogg",
@@ -2062,6 +2074,7 @@
 
   // The picked song is loaded (not played) so its length shows and it can be rewound before it starts.
   function attachSong() {
+    if (songs.external) return; // a preview is loaded instead: the picked song comes back after it
     const song = songs.list.find((x) => x.id === songs.current);
     if (!song || songs.loadedId === song.id) return;
     songs.audio.preload = "metadata";
@@ -2082,7 +2095,7 @@
       return;
     }
     if (!songs.list.some((x) => x.id === songs.current)) songs.current = songs.list.length ? songs.list[0].id : "";
-    if (songs.playing && !songs.list.some((x) => x.id === songs.loadedId)) stopSong(); // deleted from another device
+    if (songs.playing && !songs.external && !songs.list.some((x) => x.id === songs.loadedId)) stopSong(); // deleted from another device
     if (!songs.playing) attachSong();
     showSongs();
   }
@@ -2092,9 +2105,10 @@
     $("songSelect").replaceChildren(...(has ? songs.list.map((x) => new Option(x.name, x.id)) : [new Option("Пісень ще немає", "")]));
     $("songSelect").value = songs.current;
     $("songSelect").disabled = !has;
-    $("songPlay").disabled = !has;
+    $("songPlay").disabled = !has && !songs.playing && !songs.pending;
     $("songDelete").disabled = !has;
     $("songPlay").textContent = songs.playing ? "■ Зупинити" : songs.pending ? "✕ Скасувати" : "▶ Увімкнути";
+    showMusicBtn();
   }
 
   async function addSongs(files) {
@@ -2175,7 +2189,7 @@
       }
       const song = songs.list.find((x) => x.id === songs.current);
       cancelPending();
-      if (song && !songs.playing) startSong();
+      if ((song || songs.external) && !songs.playing) startSong();
     }, 250);
     showSongs();
     showState();
@@ -2209,6 +2223,17 @@
     cancelPending();
     songs.audio.pause();
     endSong();
+    clearExternal();
+  }
+
+  // A preview is over: the player gets the picked song back.
+  function clearExternal() {
+    if (!songs.external || songs.playing) return;
+    songs.external = null;
+    songs.loadedId = "";
+    songNote();
+    attachSong();
+    showSeek();
   }
 
   // The song is over (or stopped): the mic comes back, she stays paused until «Продовжити» / her wake phrase.
@@ -2219,6 +2244,7 @@
       songs.mutedMic = false;
       if (micMuted && eva.mode !== "off") setMicMuted(false);
     }
+    clearExternal();
     showSongs();
     if (eva.mode !== "off") showState();
   }
@@ -2227,8 +2253,9 @@
     songs.audio.addEventListener("ended", () => { songs.audio.currentTime = 0; endSong(); showSeek(); });
     songs.audio.addEventListener("error", () => {
       if (!songs.playing) return;
+      const preview = Boolean(songs.external);
       endSong();
-      addLine("system", "Цю пісню не вдалося відтворити — формат не підтримується браузером.");
+      addLine("system", preview ? "Уривок не вдалося відтворити." : "Цю пісню не вдалося відтворити — формат не підтримується браузером.");
     });
     $("songFile").addEventListener("change", (e) => { addSongs([...e.target.files]); e.target.value = ""; });
     $("songSelect").addEventListener("change", () => {
@@ -2254,6 +2281,465 @@
     // Another device may have added or removed songs: look again when the page comes back and every half minute.
     document.addEventListener("visibilitychange", () => { if (!document.hidden) loadSongs(); });
     setInterval(() => { if (!document.hidden) loadSongs(); }, 30000);
+    initMusicPanel();
+  }
+
+  // ── «Музика» panel: the header button opens it — the songs, Шазам (what plays nearby) and «Створити» (a new song) ──
+  // All three work by voice too: recognize_song makes this page record the clip, generate_song starts the same job as
+  // «Створити пісню», play_song asks the page to play a song (fetched from /api/music/action).
+  const MUSIC_CALLS = new Set(["recognize_song", "generate_song", "play_song"]);
+  const MUSIC_TABS = ["songs", "shazam", "create"];
+  const CLIP_MS = 10000; // AudD needs a few seconds; ten is safe in a noisy room
+  const JOB_POLL_MS = 4000;
+  const CLIP_TYPES = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus", "audio/webm"];
+  const LINK_NAMES = [["spotify", "Spotify"], ["apple_music", "Apple Music"], ["youtube", "YouTube"], ["deezer", "Deezer"]];
+  const shazamInfoText = $("shazamStatus").textContent;
+  const genInfoText = $("genInfo").textContent;
+  const shazamNote = (text) => { $("shazamStatus").textContent = text || shazamInfoText; };
+  const genNote = (text) => { $("genInfo").textContent = text || genInfoText; };
+  const mk = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+  };
+  const isWebUrl = (url) => /^https:\/\//.test(url || "");
+  const trackName = (t) => "«" + (t.title || "без назви") + "» — " + (t.artist || "невідомий виконавець");
+
+  function setMusicTab(tab) {
+    if (!MUSIC_TABS.includes(tab)) tab = "songs";
+    musicUi.tab = tab;
+    store.set("va-music-tab", tab);
+    document.querySelectorAll("[data-music-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.musicTab === tab)));
+    document.querySelectorAll("[data-music-panel]").forEach((panel) => { panel.hidden = panel.dataset.musicPanel !== tab; });
+    if (tab === "create") musicUi.unseen = false;
+    showMusicBtn();
+  }
+
+  function setMusicOpen(open, tab) {
+    musicUi.open = open;
+    if (tab) setMusicTab(tab);
+    $("musicCard").hidden = !open;
+    $("musicBtn").setAttribute("aria-expanded", String(open));
+    store.set("va-music-open", open ? "1" : "0");
+    if (open && musicUi.tab === "create") musicUi.unseen = false;
+    showMusicBtn();
+    if (open && tab) $("musicCard").scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  // The header button tells what music is doing even with the panel closed.
+  function showMusicBtn() {
+    const btn = $("musicBtn");
+    if (!btn) return;
+    btn.classList.toggle("listening", musicUi.listening);
+    btn.classList.toggle("playing", songs.playing && !musicUi.listening);
+    btn.classList.toggle("busy", !songs.playing && !musicUi.listening && musicUi.jobs.some((j) => j.status === "running"));
+    $("musicBadge").hidden = !musicUi.unseen;
+  }
+
+  // ── Шазам ──
+  function clipType() {
+    if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return "";
+    return CLIP_TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+  }
+
+  // Raw sound: echo cancelling and noise suppression (what the call's mic uses) wipe music out. On iPhone a second
+  // capture with other settings can silence the call's own mic, so a copy of that one is used there.
+  async function openClipMic() {
+    const callTrack = mic && mic.getAudioTracks().find((t) => t.readyState === "live");
+    const copy = () => { const t = callTrack.clone(); t.enabled = true; return new MediaStream([t]); };
+    if (IOS && callTrack) return copy();
+    const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    if (micId) raw.deviceId = { ideal: micId };
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: raw });
+    } catch (err) {
+      if (callTrack) return copy();
+      throw err;
+    }
+  }
+
+  // While the clip records the call hears nothing: no barge-in on the music, no transcript of it. Quietly — not
+  // «Вимкнути мікрофон», which the user set and which stays as it was.
+  function holdCallMic(hold) {
+    const tracks = [...(mic ? mic.getAudioTracks() : []), ...(gate && gate.track ? [gate.track] : [])];
+    tracks.forEach((t) => { t.enabled = !hold && !micMuted; });
+  }
+
+  // Her «Слухаю…» must not be in the clip: recording starts once her audio has stopped (or after maxMs).
+  const waitHerQuiet = (maxMs) => new Promise((done) => {
+    const until = Date.now() + maxMs;
+    const tick = () => (!barge.audible || Date.now() > until ? done() : setTimeout(tick, 100));
+    tick();
+  });
+
+  function showListening(left) {
+    const btn = $("shazamBtn");
+    btn.classList.toggle("listening", left !== 0);
+    btn.disabled = left !== 0 || !musicUi.status.recognize;
+    btn.textContent = left > 0 ? "Слухаю… " + left + " с" : left < 0 ? "Шукаю, що це…" : "🎧 Слухати";
+    if (left > 0) shazamNote("Тримайте телефон ближче до звуку.");
+    showMusicBtn();
+  }
+
+  // The countdown on the button while a clip records.
+  function countdown(ms) {
+    return new Promise((done) => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        const left = Math.ceil((ms - (Date.now() - started)) / 1000);
+        if (left > 0) { showListening(left); return; }
+        clearInterval(timer);
+        done();
+      }, 250);
+    });
+  }
+
+  // The clip as WAV (16-bit mono, ~16 kHz) built here from the raw samples: AudD fingerprints that reliably — the
+  // containers MediaRecorder writes failed (prod: «problem with creating an audio fingerprint»). Its level (RMS)
+  // tells silence apart. The call's running AudioContext is used when there is one (WebKit starts a new one only in
+  // a tap); null when audio can't start here — then MediaRecorder records instead.
+  async function recordWav(stream) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    const shared = gate && gate.ctx && gate.ctx.state === "running" ? gate.ctx : null;
+    let ctx = shared;
+    if (!ctx) {
+      try { ctx = new AudioCtx(); } catch { return null; }
+      await within(ctx.resume(), 1000);
+      if (ctx.state !== "running") { ctx.close().catch(() => {}); return null; }
+    }
+    const source = ctx.createMediaStreamSource(stream);
+    const proc = ctx.createScriptProcessor(4096, 1, 1);
+    const parts = [];
+    let sumSq = 0;
+    let count = 0;
+    proc.onaudioprocess = (e) => {
+      const data = e.inputBuffer.getChannelData(0);
+      parts.push(new Float32Array(data));
+      for (let i = 0; i < data.length; i++) sumSq += data[i] * data[i];
+      count += data.length;
+    }; // the output stays silent: nothing of the clip is played
+    source.connect(proc);
+    proc.connect(ctx.destination);
+    await countdown(CLIP_MS);
+    proc.onaudioprocess = null;
+    source.disconnect();
+    proc.disconnect();
+    const rate = ctx.sampleRate;
+    if (!shared) ctx.close().catch(() => {});
+    if (!count) return null;
+    const step = Math.max(1, Math.floor(rate / 16000));
+    const samples = new Float32Array(count);
+    let at = 0;
+    for (const part of parts) { samples.set(part, at); at += part.length; }
+    const pcm = new Int16Array(Math.floor(count / step));
+    for (let i = 0; i < pcm.length; i++) {
+      let sum = 0;
+      for (let k = 0; k < step; k++) sum += samples[i * step + k];
+      const v = Math.max(-1, Math.min(1, sum / step));
+      pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+    }
+    return { blob: wavBlob(pcm, Math.round(rate / step)), level: Math.sqrt(sumSq / count) };
+  }
+
+  function wavBlob(pcm, rate) {
+    const view = new DataView(new ArrayBuffer(44));
+    const text = (at, str) => { for (let i = 0; i < str.length; i++) view.setUint8(at + i, str.charCodeAt(i)); };
+    text(0, "RIFF"); view.setUint32(4, 36 + pcm.byteLength, true); text(8, "WAVE");
+    text(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    text(36, "data"); view.setUint32(40, pcm.byteLength, true);
+    return new Blob([view, pcm], { type: "audio/wav" });
+  }
+
+  function recordClip(stream, type) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      let rec;
+      try { rec = new MediaRecorder(stream, { mimeType: type }); } catch (err) { reject(err); return; }
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onerror = (e) => reject((e && e.error) || new Error("запис перервався"));
+      rec.onstop = () => (chunks.length ? resolve(new Blob(chunks, { type: rec.mimeType || type })) : reject(new Error("порожній запис")));
+      rec.start(1000);
+      const started = Date.now();
+      const timer = setInterval(() => {
+        const left = Math.ceil((CLIP_MS - (Date.now() - started)) / 1000);
+        if (left > 0) { showListening(left); return; }
+        clearInterval(timer);
+        if (rec.state !== "inactive") rec.stop();
+      }, 250);
+    });
+  }
+
+  // via: "button" (the panel) or "voice" (recognize_song is waiting on the server for this clip).
+  async function listenForSong(via) {
+    if (musicUi.listening) return;
+    setMusicOpen(true, "shazam");
+    if (!musicUi.status.recognize) { shazamNote("Розпізнавання музики ще не налаштоване на сервері (потрібен ключ AudD)."); return; }
+    const type = clipType();
+    const canWav = Boolean(window.AudioContext || window.webkitAudioContext);
+    if (!HAS_MIC_API || (!type && !canWav)) { shazamNote("Цей браузер не вміє записувати звук для розпізнавання."); return; }
+    musicUi.listening = true;
+    showListening(CLIP_MS / 1000);
+    fetch(BACKEND + "/api/music/listening", { method: "POST", headers: headers() }).catch(() => {});
+    if (via === "voice") await waitHerQuiet(2500);
+    const inCall = eva.mode !== "off";
+    if (inCall) holdCallMic(true);
+    let stream = null;
+    try {
+      stream = await openClipMic();
+      const wav = canWav ? await recordWav(stream) : null;
+      if (!wav && !type) throw new Error("цей браузер не вміє записувати звук");
+      const blob = wav ? wav.blob : await recordClip(stream, type);
+      showListening(-1);
+      shazamNote("Шукаю, що це…");
+      const sendHeaders = { "Content-Type": blob.type || type, "X-Client-Id": clientId };
+      if (wav) sendHeaders["X-Clip-Level"] = wav.level.toFixed(5);
+      const res = await fetch(BACKEND + "/api/music/recognize?via=" + via, { method: "POST", headers: sendHeaders, body: blob });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || "помилка " + res.status);
+      showTrackResult(body);
+    } catch (err) {
+      shazamNote(err && err.name === "NotAllowedError" ? "Браузер не дав мікрофон — дозвольте його й спробуйте ще раз."
+        : "Не вдалося: " + ((err && err.message) || err));
+    } finally {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      if (inCall) holdCallMic(false);
+      musicUi.listening = false;
+      showListening(0);
+    }
+  }
+
+  function showTrackResult(result) {
+    if (!result || !result.found) {
+      $("shazamResult").hidden = true;
+      shazamNote(result && result.quiet ? "Мікрофон майже нічого не почув — увімкніть музику голосніше або піднесіть телефон ближче."
+        : "Не вдалося впізнати — піднесіть телефон ближче до звуку й спробуйте ще раз.");
+      return;
+    }
+    shazamNote();
+    renderTrack(result);
+    musicUi.history = [{ ...result, at: Date.now() },
+      ...musicUi.history.filter((h) => !(h.title === result.title && h.artist === result.artist))].slice(0, 8);
+    store.set("va-shazam", JSON.stringify(musicUi.history));
+    renderHistory();
+  }
+
+  function renderTrack(t) {
+    musicUi.track = t;
+    const box = $("shazamResult");
+    let cover;
+    if (isWebUrl(t.cover_url)) {
+      cover = mk("img", "track-cover");
+      cover.src = t.cover_url;
+      cover.alt = "";
+      cover.referrerPolicy = "no-referrer";
+    } else cover = mk("div", "track-cover", "🎵");
+    const info = mk("div");
+    const meta = [t.album, (t.release_date || "").slice(0, 4)].filter(Boolean).join(" · ");
+    info.append(mk("div", "track-title", t.title || "Без назви"), mk("div", "track-artist", t.artist || ""));
+    if (meta) info.append(mk("div", "track-meta", meta));
+    const actions = mk("div", "track-actions");
+    if (isWebUrl(t.preview_url)) {
+      const play = mk("button", "btn primary small-btn", "▶ Уривок 30 с");
+      play.type = "button";
+      play.addEventListener("click", () => playPreview(t.preview_url, trackName(t)));
+      actions.append(play);
+    }
+    const links = t.links || {};
+    for (const [key, label] of LINK_NAMES) {
+      if (!isWebUrl(links[key])) continue;
+      const a = mk("a", "btn ghost small-btn", label);
+      a.href = links[key];
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      actions.append(a);
+    }
+    box.replaceChildren(cover, info, actions);
+    box.hidden = false;
+  }
+
+  function renderHistory() {
+    const list = $("shazamHistory");
+    list.replaceChildren(...musicUi.history.map((h) => {
+      const li = mk("li");
+      const btn = mk("button");
+      btn.type = "button";
+      const when = new Date(h.at || 0);
+      const today = when.toDateString() === new Date().toDateString();
+      btn.append(mk("span", "", trackName(h)), mk("span", "when", today
+        ? when.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" }) : when.toLocaleDateString("uk-UA")));
+      btn.addEventListener("click", () => renderTrack(h));
+      li.append(btn);
+      return li;
+    }));
+    $("shazamHistoryBlock").hidden = musicUi.history.length === 0;
+  }
+
+  // A recognised song's 30 s preview, in the songs' player: she pauses for it the same way.
+  function playPreview(url, name) {
+    if (songs.playing || songs.pending) stopSong();
+    songs.external = { url, name };
+    songs.audio.src = url;
+    songs.loadedId = "ext";
+    songNote("Уривок: " + name);
+    showSeek();
+    if (eva.mode === "connecting" || eva.mode === "switching") { addLine("system", "Зачекайте, поки розмова підключиться."); clearExternal(); return; }
+    if (eva.mode === "active" && quietFor() < SONG_NOW_QUIET_MS) { queueSong(); return; }
+    startSong();
+  }
+
+  // ── a song from «Музика» by its id (play_song, «▶ Увімкнути» of a new song) ──
+  async function playSongById(id, tapped) {
+    if (!songs.list.some((x) => x.id === id)) await loadSongs();
+    if (!songs.list.some((x) => x.id === id)) { addLine("system", "Цієї пісні вже немає в «Музиці»."); return; }
+    if (songs.playing || songs.pending) stopSong();
+    songs.current = id;
+    store.set("va-song", id);
+    attachSong();
+    showSongs();
+    setMusicOpen(true, "songs");
+    if (tapped) primeSong();
+    playSong();
+  }
+
+  // ── Створити ──
+  async function createSong() {
+    const prompt = $("genPrompt").value.trim();
+    const lyrics = $("genLyrics").value.trim();
+    if (!prompt && !lyrics) { genNote("Опишіть, яку пісню створити."); $("genPrompt").focus(); return; }
+    $("genBtn").disabled = true;
+    try {
+      const res = await fetch(BACKEND + "/api/music/generate", {
+        method: "POST", headers: headers(),
+        body: JSON.stringify({ prompt, lyrics, title: $("genTitle").value.trim(), instrumental: $("genInstrumental").checked }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || "помилка " + res.status);
+      genNote("Пишу «" + body.title + "» — це хвилина-дві, розмова тим часом іде як завжди.");
+      $("genPrompt").value = "";
+      $("genLyrics").value = "";
+      $("genTitle").value = "";
+      refreshJobs();
+    } catch (err) {
+      genNote("Не вдалося: " + err.message);
+    } finally {
+      $("genBtn").disabled = !musicUi.status.generate;
+    }
+  }
+
+  async function refreshJobs() {
+    let list;
+    try {
+      const res = await fetch(BACKEND + "/api/music/jobs", { headers: headers() });
+      if (!res.ok) return;
+      list = (await res.json()).jobs || [];
+    } catch { return; }
+    const before = new Map(musicUi.jobs.map((j) => [j.id, j.status]));
+    const now = Date.now();
+    list.forEach((j) => { j.localStart = now - (j.elapsed_s || 0) * 1000; });
+    musicUi.jobs = list;
+    let ready = false;
+    for (const j of list) {
+      if (before.get(j.id) !== "running" || j.status === "running") continue;
+      if (j.status === "done") { ready = true; addLine("system", "Пісня «" + j.song_name + "» готова — вона в «Музиці»."); }
+      else addLine("system", "Пісню «" + j.title + "» написати не вдалося: " + j.error);
+    }
+    if (ready) {
+      await loadSongs();
+      if (!musicUi.open || musicUi.tab !== "create") musicUi.unseen = true;
+    }
+    renderJobs();
+    clearTimeout(musicUi.jobsTimer);
+    if (list.some((j) => j.status === "running")) musicUi.jobsTimer = setTimeout(refreshJobs, JOB_POLL_MS);
+  }
+
+  function jobState(j) {
+    if (j.status === "running") return "Пишеться… " + clock((Date.now() - j.localStart) / 1000);
+    if (j.status === "done") return "Готово — у «Піснях»" + (j.model ? " · " + j.model : "");
+    return j.error || "Не вдалося";
+  }
+
+  function renderJobs() {
+    $("genJobs").replaceChildren(...musicUi.jobs.slice(0, 6).map((j) => {
+      const li = mk("li");
+      const text = mk("div");
+      text.append(mk("div", "job-title", j.title), mk("div", "job-state " + j.status, jobState(j)));
+      text.lastChild.dataset.job = j.id;
+      li.append(text);
+      if (j.status === "done" && j.song_id) {
+        const play = mk("button", "btn small-btn", "▶ Увімкнути");
+        play.type = "button";
+        play.addEventListener("click", () => playSongById(j.song_id, true));
+        li.append(play);
+      }
+      return li;
+    }));
+    clearInterval(musicUi.jobsTick);
+    musicUi.jobsTick = null;
+    if (musicUi.jobs.some((j) => j.status === "running")) {
+      musicUi.jobsTick = setInterval(() => {
+        for (const j of musicUi.jobs) {
+          const node = j.status === "running" && $("genJobs").querySelector('[data-job="' + j.id + '"]');
+          if (node) node.textContent = jobState(j);
+        }
+      }, 1000);
+    }
+    showMusicBtn();
+  }
+
+  async function loadMusicStatus() {
+    try {
+      const res = await fetch(BACKEND + "/api/music/status");
+      if (res.ok) musicUi.status = await res.json();
+    } catch { /* the buttons stay on; a failure says why */ }
+    $("shazamBtn").disabled = !musicUi.status.recognize;
+    $("genBtn").disabled = !musicUi.status.generate;
+    if (!musicUi.status.recognize) shazamNote("Розпізнавання музики ще не налаштоване на сервері (потрібен ключ AudD).");
+    if (!musicUi.status.generate) genNote("Створення пісень ще не налаштоване на сервері (потрібен ключ OpenRouter або Gemini).");
+  }
+
+  // ── her music tools (the backend's calls, seen on the call's data channel) ──
+  function onMusicCall(name, callId, done) {
+    if (name === "recognize_song") {
+      if (musicUi.calls.has(callId)) return;
+      musicUi.calls.add(callId);
+      listenForSong("voice");
+      return;
+    }
+    if (!done || musicUi.calls.has(callId + ":" + name)) return;
+    musicUi.calls.add(callId + ":" + name);
+    if (name === "play_song") fetchMusicAction(0);
+    else if (name === "generate_song") { setMusicOpen(true, "create"); setTimeout(refreshJobs, 800); }
+  }
+
+  // The call is seen here before the server has run it: ask a few times until the song it picked is there.
+  async function fetchMusicAction(tries) {
+    try {
+      const res = await fetch(BACKEND + "/api/music/action", { headers: headers() });
+      const action = res.ok ? (await res.json()).action : null;
+      if (action) {
+        if (action.type === "play" && action.song_id) playSongById(action.song_id, false);
+        else if (action.type === "preview" && isWebUrl(action.url)) { setMusicOpen(true, "shazam"); playPreview(action.url, action.name || "уривок"); }
+        return;
+      }
+    } catch { /* tried again below */ }
+    if (tries < 10) setTimeout(() => fetchMusicAction(tries + 1), 400);
+  }
+
+  function initMusicPanel() {
+    setMusicTab(musicUi.tab);
+    setMusicOpen(musicUi.open);
+    $("musicBtn").addEventListener("click", () => setMusicOpen(!musicUi.open));
+    $("musicClose").addEventListener("click", () => setMusicOpen(false));
+    document.querySelectorAll("[data-music-tab]").forEach((b) => b.addEventListener("click", () => setMusicTab(b.dataset.musicTab)));
+    $("shazamBtn").addEventListener("click", () => listenForSong("button"));
+    $("genBtn").addEventListener("click", createSong);
+    renderHistory();
+    loadMusicStatus();
+    refreshJobs();
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshJobs(); });
   }
 
   async function newConversation() {

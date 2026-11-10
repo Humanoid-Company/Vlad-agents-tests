@@ -41,7 +41,7 @@ from config import (
 )
 from prompts.backend_prompt import build_backend_prompt, local_today
 from prompts.live_prompt import build_concierge_prompt, build_live_prompt
-from server import checkins, conversations, knowledge, songs, usage
+from server import checkins, conversations, knowledge, music, songs, usage
 from server.call_log import CallLogStore
 from server.db import StoreError
 from server.knowledge_import import KnowledgeImportError, make_openai_extract, make_openai_plan, parse_file
@@ -54,6 +54,7 @@ from tools.live_schemas import (
     REMEMBER_PERSON_TOOL,
     LIVE_BACKEND_TOOLS,
     LOOK_AT_CAMERA_TOOL,
+    MUSIC_TOOLS,
 )
 from voice.background import wake_commentary
 from voice.delegation import responses_delegation
@@ -100,6 +101,24 @@ _CAMERA_NOTE = (
     "same picture» from memory, and never a room, person or object you imagine. What they showed "
     "before you may recall from earlier looks. One look per request: do not look again on your own. "
     "If you said something a look did not confirm, it was your mistake — say so, never blame the user."
+)
+# «Музика» (server/music.py): she can't hear music or sing herself — the backend can (recognize_song, generate_song,
+# play_song). Short: it is in every call's instructions.
+_MUSIC_NOTE = (
+    "\nMusic: you cannot hear music or sing by yourself — the backend can. «що це грає?», «що за пісня?», «впізнай "
+    "пісню» go to the backend at once: it listens through the mic for about ten seconds, so say only a short "
+    "«Слухаю…» and then stay silent until it reports. If they only say they are going to put music on, tell them to "
+    "put it on and to say when it plays — listen then, not before. A new song («напиши / створи пісню про …») goes "
+    "to the backend once you know what it is about (a theme, a person, an occasion) or its style; a bare «можеш "
+    "створити пісню?» — ask what about first. It is ready in a minute or two in «Музика» — the talk goes on "
+    "meanwhile; never sing or read lyrics yourself. «увімкни пісню …», «увімкни її» go to the backend too. While a song plays you are paused."
+)
+_MUSIC_BACKEND_NOTE = (
+    "\nMusic: recognize_song listens to what plays near the user — call it once per request, never guess a song. "
+    "generate_song starts a new song — only once the user said what it is about or its style; if they did not, "
+    "do not call it: write a short question asking what the song should be about. You write the prompt and, for a "
+    "song with words, short original lyrics with [Verse] / [Chorus] tags in the user's language. It returns at once — "
+    "write that it is being written, never the lyrics. play_song plays a song from «Музика» by name, or recognized=true for the song just recognised.\n"
 )
 # v5's camera rules, condensed the same way.
 # The characters (all but Кішка) are people: what the backend writes for them is never «як ШІ» either.
@@ -248,6 +267,7 @@ def _session_config(user: WebUser, *, concierge: bool = False) -> dict:
         + (_CAMERA_NOTE_V5 if user.prompt_variant == "v5" else _CAMERA_NOTE)
         + (_SCENE_NOTE if CAMERA_SCENE_CONTEXT else "")
         + _PEOPLE_NOTE
+        + _MUSIC_NOTE
         + standing,
         "audio": {"output": {"voice": api_voice(voice, voice in user.old_voices)}},
         "delegation": responses_delegation(
@@ -256,8 +276,9 @@ def _session_config(user: WebUser, *, concierge: bool = False) -> dict:
             + knowledge.PEOPLE_NOTE
             + (VOICE_PERSONAS[voice].backend_note if voice in VOICE_PERSONAS else "")
             + (_PERSON_BACKEND_NOTE if voice in VOICE_PERSONAS else "")
+            + _MUSIC_BACKEND_NOTE
             + knowledge.pinned_note(backend=True, character=user.character),
-            tools=[*LIVE_BACKEND_TOOLS, LOOK_AT_CAMERA_TOOL, KNOWLEDGE_LOOKUP_TOOL, REMEMBER_PERSON_TOOL],
+            tools=[*LIVE_BACKEND_TOOLS, LOOK_AT_CAMERA_TOOL, KNOWLEDGE_LOOKUP_TOOL, REMEMBER_PERSON_TOOL, *MUSIC_TOOLS],
             parallel_tools=OPENAI_LIVE_PARALLEL_TOOLS,
             effort=OPENAI_LIVE_BACKEND_EFFORT,
         ),
@@ -612,6 +633,97 @@ def song_audio(song_id: str, range: str | None = Header(default=None)) -> Respon
 @app.delete("/api/songs/{song_id}")
 def delete_song(song_id: str) -> dict:
     return {"ok": _songs(songs.store.delete, song_id)}
+
+
+# ── «Музика»: recognising what plays nearby and writing new songs (server/music.py) ──
+@app.get("/api/music/status")
+def music_status() -> dict:
+    return music.status()
+
+
+@app.post("/api/music/listening")
+def music_listening(x_client_id: str | None = Header(default=None)) -> dict:
+    """The page started recording a clip: recognize_song waits for it instead of giving up."""
+    _user(x_client_id).music_listening_at = time.time()
+    return {"ok": True}
+
+
+@app.post("/api/music/recognize")
+async def music_recognize(request: Request, via: str = "button", x_client_id: str | None = Header(default=None),
+                          x_clip_level: str | None = Header(default=None)) -> dict:
+    """A clip of what plays nearby (raw audio body). The result goes to the page and to a waiting recognize_song."""
+    user = await asyncio.to_thread(_talker, x_client_id)
+    mime = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if not mime.startswith("audio/"):
+        raise HTTPException(status_code=415, detail="Це не аудіо.")
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="Порожній запис.")
+    if len(data) > music.MAX_CLIP_BYTES:
+        raise HTTPException(status_code=413, detail="Запис завеликий.")
+    try:
+        level = float(x_clip_level) if x_clip_level else None
+    except ValueError:
+        level = None
+    if level is not None and level < music.QUIET_LEVEL:
+        logger.info("music.recognize.quiet level=%.5f bytes=%s", level, len(data))
+        result = {"found": False, "quiet": True}
+        user.set_music_result(result)
+        return result
+    try:
+        result = await asyncio.to_thread(music.recognize, data, mime)
+    except music.MusicError as exc:
+        user.set_music_result({"found": False, "error": exc.message})
+        raise HTTPException(status_code=503 if exc.code in ("not_configured", "unavailable") else 502,
+                            detail=exc.message) from exc
+    user.set_music_result(result)
+    if via != "voice" and result.get("found") and user.bridges and not user.concierge:
+        # Recognised from the panel during a call: she knows it if they ask «а що це було?».
+        task = asyncio.create_task(user.think_note(f"[музика] Користувач щойно впізнав у панелі «Музика»: "
+                                                   f"{music.describe(result)}."))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+    return result
+
+
+@app.get("/api/music/action")
+def music_action(x_client_id: str | None = Header(default=None)) -> dict:
+    """What play_song asked this page to play (taken once)."""
+    return {"action": _user(x_client_id).take_music_action()}
+
+
+class GenerateBody(BaseModel):
+    prompt: str = ""
+    lyrics: str = ""
+    instrumental: bool = False
+    title: str = ""
+
+
+@app.post("/api/music/generate")
+async def music_generate(body: GenerateBody, x_client_id: str | None = Header(default=None)) -> dict:
+    """«Створити» in the panel: a song job like generate_song's (she is not told — the panel shows it)."""
+    user = await asyncio.to_thread(_talker, x_client_id)
+    if not music.providers():
+        raise HTTPException(status_code=503, detail="Генерація музики не налаштована (немає OPENROUTER_API_KEY чи GEMINI_API_KEY на сервері).")
+    prompt, lyrics = body.prompt.strip(), body.lyrics.strip()
+    if not prompt and not lyrics:
+        raise HTTPException(status_code=400, detail="Опишіть пісню: про що, у якому стилі.")
+    if not prompt:
+        prompt = "A song with these lyrics."
+    title = music.song_title(body.title, prompt)
+    try:
+        job = music.jobs.start(user.client_id, title=title, prompt=prompt, via="button")
+    except music.MusicError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    task = asyncio.create_task(music.run_job(job, prompt, lyrics, body.instrumental, notify=user.song_ready))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return job.public()
+
+
+@app.get("/api/music/jobs")
+def music_jobs(x_client_id: str | None = Header(default=None)) -> dict:
+    return {"jobs": music.jobs.for_client(_user(x_client_id).client_id)}
 
 
 class OverheardBody(BaseModel):
