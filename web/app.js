@@ -476,7 +476,7 @@
     external: null }; // external: {url, name} — a recognised song's preview playing in the same player
   songs.audio.setAttribute("playsinline", "");
   // The «Музика» panel (header button): which tab, what Шазам found, the songs being written (see initMusicPanel).
-  const musicUi = { open: store.get("va-music-open") === "1", tab: store.get("va-music-tab") || "songs",
+  const musicUi = { open: false, tab: store.get("va-music-tab") || "songs",
     status: { recognize: true, generate: true }, listening: false, track: null, history: [], jobs: [],
     jobsTimer: null, jobsTick: null, unseen: false, calls: new Set() };
   try { musicUi.history = JSON.parse(store.get("va-shazam") || "[]").slice(0, 8); } catch { musicUi.history = []; }
@@ -2324,7 +2324,6 @@
     store.set("va-music-open", open ? "1" : "0");
     if (open && musicUi.tab === "create") musicUi.unseen = false;
     showMusicBtn();
-    if (open && tab) $("musicCard").scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   // The header button tells what music is doing even with the panel closed.
@@ -2733,6 +2732,11 @@
     setMusicOpen(musicUi.open);
     $("musicBtn").addEventListener("click", () => setMusicOpen(!musicUi.open));
     $("musicClose").addEventListener("click", () => setMusicOpen(false));
+    // A mini panel: a click outside it or Esc closes it (a song keeps playing).
+    document.addEventListener("click", (e) => {
+      if (musicUi.open && !$("musicCard").contains(e.target) && !$("musicBtn").contains(e.target)) setMusicOpen(false);
+    });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && musicUi.open) setMusicOpen(false); });
     document.querySelectorAll("[data-music-tab]").forEach((b) => b.addEventListener("click", () => setMusicTab(b.dataset.musicTab)));
     $("shazamBtn").addEventListener("click", () => listenForSong("button"));
     $("genBtn").addEventListener("click", createSong);
