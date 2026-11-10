@@ -41,7 +41,7 @@ from config import (
 )
 from prompts.backend_prompt import build_backend_prompt, local_today
 from prompts.live_prompt import build_concierge_prompt, build_live_prompt
-from server import checkins, conversations, knowledge, music, songs, usage
+from server import checkins, conversations, knowledge, music, robots, songs, usage
 from server.call_log import CallLogStore
 from server.db import StoreError
 from server.knowledge_import import KnowledgeImportError, make_openai_extract, make_openai_plan, parse_file
@@ -195,7 +195,9 @@ async def _lifespan(_app: FastAPI):
         logger.warning("WEB_SEARCH_API_KEY is not set: web search answers «unavailable»")
     if not knowledge.store.persistent:
         logger.warning("DATABASE_URL is not set: «Знання» lives in a SQLite file that the next deploy wipes")
+    robots.relay.start()  # «Роботи»: прибирає зі списку bridge'і, що замовкли
     yield
+    robots.relay.stop()
     if task is not None:
         task.cancel()
     users.save_all()  # a deploy stops the server: conversations not yet written are written now
@@ -208,6 +210,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE"],  # DELETE: «Нова розмова», background listening off, a knowledge set
     allow_headers=["*"],
 )
+app.include_router(robots.router)  # «Роботи»: /ws/robot, /ws/operator, /api/robots
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 users = WebUserRegistry()

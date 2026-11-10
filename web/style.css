@@ -323,6 +323,7 @@ form.card[hidden], [role="tabpanel"][hidden] { display: none; }
       "head head"
       "tabs conv"
       "call conv"
+      "robots conv"
       "music conv"
       "devices conv"
       "voice conv"
@@ -332,6 +333,7 @@ form.card[hidden], [role="tabpanel"][hidden] { display: none; }
   .wrap.app > .page-head { grid-area: head; margin-bottom: 4px; }
   .wrap.app > .mode-tabs { grid-area: tabs; }
   .wrap.app > .call { grid-area: call; }
+  .wrap.app > #robotsPanel { grid-area: robots; }
   .wrap.app > #musicCard { grid-area: music; }
   .wrap.app > #devices { grid-area: devices; }
   .wrap.app > #voiceCard { grid-area: voice; }
@@ -417,3 +419,40 @@ form.card[hidden], [role="tabpanel"][hidden] { display: none; }
 .shazam-debug summary { cursor: pointer; color: var(--muted, inherit); }
 .shazam-debug audio { width: 100%; margin-top: 8px; }
 .shazam-debug[hidden] { display: none; }
+
+/* «Роботи» (web/robots.js): список роботів, два джойстики й СТОП. Та сама панель — у картці на головній і на robots.html. */
+.robots-btn { cursor: pointer; font: inherit; font-size: 0.9rem; font-weight: 600; }
+.robots-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.robots-card[hidden] { display: none; }
+.rb-conn { display: inline-flex; align-items: center; gap: 6px; }
+.rb-login { margin-top: 8px; }
+.rb-login[hidden] { display: none; }
+.rb-robots { display: flex; gap: 8px; overflow-x: auto; margin-top: 12px; padding-bottom: 2px; }
+.rb-robot { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; flex: 1 0 150px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.rb-robot.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.rb-robot-name { font-weight: 600; }
+.rb-badge { margin-top: 4px; padding: 1px 8px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
+.rb-badge.free { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.rb-badge.mine { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.rb-badge.busy { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.rb-empty { margin: 4px 0; }
+.rb-ctrl { margin-top: 14px; }
+.rb-ctrl.rb-off { opacity: 0.45; pointer-events: none; }
+.rb-ctrl-top .rb-status { flex: 1 1 160px; color: var(--muted); font-size: 0.9rem; }
+.rb-ctrl-top .btn[hidden] { display: none; }
+.rb-pads { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 16px 0 28px; }
+.rb-pad { position: relative; width: min(38vw, 170px); aspect-ratio: 1; border-radius: 50%; touch-action: none; user-select: none;
+  -webkit-user-select: none; background: radial-gradient(circle, var(--bot) 0, var(--bg) 72%); border: 1px solid var(--line); }
+.rb-pad.rb-off { opacity: 0.45; pointer-events: none; }
+.rb-knob { position: absolute; left: 30%; top: 30%; width: 40%; height: 40%; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); transition: transform 0.12s; }
+.rb-pad.active .rb-knob { transition: none; }
+.rb-pad-label { position: absolute; left: 0; right: 0; bottom: -24px; text-align: center; font-size: 0.8rem; color: var(--muted); }
+.btn.rb-stop { flex: 0 0 auto; width: 76px; height: 76px; padding: 0; border-radius: 50%; font-weight: 700; pointer-events: auto; }
+.rb-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.rb-actions .btn { flex: 1 1 120px; }
+.rb-log { margin-top: 12px; max-height: 110px; overflow-y: auto; font-size: 0.82rem; }
+.rb-log:empty { display: none; }
+/* robots.html: на весь екран телефона, джойстики більші */
+.robots-page .rb-pad { width: min(40vw, 210px); }
