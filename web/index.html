@@ -2,75 +2,56 @@
 <html lang="uk">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Голосові помічники</title>
   <meta name="description" content="Голосові помічники з характером: розмова голосом через GPT-Live.">
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="favicon-48.png">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="app.css">
   <script src="config.js"></script>
   <script src="app.js" defer></script>
+  <script src="ui.js" defer></script>
 </head>
-<body>
-  <main class="wrap app">
-    <header class="page-head">
-      <div>
-        <h1>Голосові помічники</h1>
-        <p class="sub">Оберіть персонажа й говоріть з ним як з людиною.</p>
-      </div>
-      <nav class="head-links" aria-label="Сторінки">
-        <a id="knowledgeLink" class="nav-btn" href="knowledge.html" hidden
-          title="Список гостей і факти про подію для консьєржа: завантажити таблицю чи документ"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/></svg><span>Знання</span></a>
-        <a id="settingsLink" class="nav-btn" href="settings.html" aria-label="Налаштування"
-          title="Версія й моделі, довідка"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="wide-only">Налаштування</span></a>
-      </nav>
-    </header>
+<body class="home">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg></span>
+      <span class="brand-name">Голосові помічники</span>
+    </div>
+    <nav class="topnav" aria-label="Сторінки">
+      <a id="knowledgeLink" class="top-link" href="knowledge.html" hidden
+        title="Список гостей і факти про подію для консьєржа: завантажити таблицю чи документ"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/></svg><span class="wide-only">Знання</span></a>
+      <a id="historyLink" class="top-link" href="history.html" title="Усі збережені розмови"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="wide-only">Історія</span></a>
+      <a id="settingsLink" class="top-link" href="settings.html" aria-label="Довідка"
+        title="Версія й моделі, довідка"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/></svg><span class="wide-only">Довідка</span></a>
+      <button id="drawerOpen" class="icon-square" type="button" aria-label="Налаштування розмови"
+        aria-controls="drawer" aria-expanded="false" title="Пристрої, звук, поведінка"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg></button>
+    </nav>
+  </header>
 
-    <nav id="characters" class="mode-tabs" role="tablist" aria-label="Персонаж"></nav>
-    <!-- «Консьєрж» is hidden for now (the code stays): the page always opens an assistant call. -->
-    <button id="modeAssistant" type="button" hidden></button>
-    <button id="modeConcierge" type="button" hidden></button>
+  <main class="layout">
+    <section class="stage call" aria-label="Розмова голосом">
+      <div class="stage-top">
+        <nav id="characters" class="chars" role="tablist" aria-label="Персонаж"></nav>
+        <p id="meter" class="meter-pill" hidden
+          title="Час, поки відкрита сесія GPT-Live (разом з першими 15 с паузи), і орієнтовна ціна за ним. Інструменти й підсумок фонового слухання оплачуються окремо й тут не враховані."></p>
+      </div>
+      <!-- «Консьєрж» is hidden for now (the code stays): the page always opens an assistant call. -->
+      <button id="modeAssistant" type="button" hidden></button>
+      <button id="modeConcierge" type="button" hidden></button>
 
-    <section class="card call">
-      <div class="status-line">
-        <span id="dot" class="dot" aria-hidden="true"></span>
-        <span id="status">Не підключено</span>
-      </div>
-      <p id="meter" class="meter" hidden
-        title="Час, поки відкрита сесія GPT-Live (разом з першими 15 с паузи), і орієнтовна ціна за ним. Інструменти й підсумок фонового слухання оплачуються окремо й тут не враховані."></p>
-      <p id="callDevices" class="call-devices"><span id="callDevicesText"></span>
-        <a href="#devices" class="call-devices-link">Змінити</a></p>
-      <div id="concierge" class="concierge" hidden data-off>
-        <div class="guest-line">
-          <span class="muted small">Гість</span>
-          <strong id="guestName">ще не назвався</strong>
-          <span id="guestBadge" class="guest-badge" hidden></span>
-        </div>
-        <div class="checkin-line">
-          <span id="checkinCount" class="muted small">Відмічено гостей: —</span>
-          <button id="checkinReset" class="btn ghost small-btn" type="button">Скинути відмітки</button>
-        </div>
-        <label class="setting check-setting" for="checkQuestion">
-          <span class="setting-text">
-            <span class="setting-title">Перевірочне питання</span>
-            <span id="checkQuestionInfo" class="hint">Після імені помічник питає щось із запису гостя (посаду, хобі…).</span>
-          </span>
-          <input id="checkQuestion" type="checkbox" class="switch" role="switch" checked>
-        </label>
-        <p id="conciergeInfo" class="hint">Помічник вітає людину, питає ім'я, звіряє його зі списком у «Знаннях» (двоє з
-          однаковим ім'ям — питає прізвище) і ставить одне перевірочне питання. Потім — «Наступний гість».</p>
-      </div>
       <div class="voice-block">
-        <p id="voiceInfo" class="hint"></p>
+        <p id="voiceInfo" class="char-info"></p>
         <div id="voiceVariantRow" class="voice-variant" hidden>
-          <label class="block-label" for="voiceVariant">Голос</label>
-          <div class="row voice-pick">
+          <label class="sr-only" for="voiceVariant">Голос</label>
+          <div class="voice-pick">
             <select id="voiceVariant">
               <option value="own">Створений голос (новий)</option>
               <option value="preset">Старий голос (пресет)</option>
             </select>
-            <button id="voicePreview" class="btn" disabled>▶ Прослухати</button>
+            <button id="voicePreview" class="pill-btn" disabled>▶ Прослухати</button>
           </div>
           <p id="voiceVariantInfo" class="hint"></p>
         </div>
@@ -78,95 +59,130 @@
         <select id="voice" disabled hidden><option>Завантаження…</option></select>
         <button id="voiceApply" class="btn primary wide" hidden>Застосувати</button>
       </div>
-      <button id="talk" class="btn primary big">Почати розмову</button>
 
-      <div class="row">
-        <button id="resume" class="btn primary" hidden>Продовжити</button>
-        <button id="pause" class="btn ghost" hidden>Пауза</button>
-        <button id="micMute" class="btn ghost" type="button" aria-pressed="false" hidden>Вимкнути мікрофон</button>
-        <button id="nextGuest" class="btn" hidden>Наступний гість</button>
+      <div class="orb-area">
+        <div class="orb"><span id="dot" class="dot" aria-hidden="true"></span></div>
+        <div class="status-block">
+          <p id="statusTitle" class="status-title" aria-hidden="true">Готові до розмови</p>
+          <p id="statusSub" class="status-sub" aria-hidden="true" hidden></p>
+          <span id="status" class="sr-only" role="status">Не підключено</span>
+        </div>
+        <p id="caption" class="caption" hidden></p>
+        <video id="cameraView" class="camera-view" autoplay muted playsinline hidden></video>
+
+        <div id="concierge" class="concierge" hidden data-off>
+          <div class="guest-line">
+            <span class="muted small">Гість</span>
+            <strong id="guestName">ще не назвався</strong>
+            <span id="guestBadge" class="guest-badge" hidden></span>
+          </div>
+          <div class="checkin-line">
+            <span id="checkinCount" class="muted small">Відмічено гостей: —</span>
+            <button id="checkinReset" class="btn ghost small-btn" type="button">Скинути відмітки</button>
+          </div>
+          <label class="setting check-setting" for="checkQuestion">
+            <span class="setting-text">
+              <span class="setting-title">Перевірочне питання</span>
+              <span id="checkQuestionInfo" class="hint">Після імені помічник питає щось із запису гостя (посаду, хобі…).</span>
+            </span>
+            <input id="checkQuestion" type="checkbox" class="switch" role="switch" checked>
+          </label>
+          <p id="conciergeInfo" class="hint">Помічник вітає людину, питає ім'я, звіряє його зі списком у «Знаннях» (двоє з
+            однаковим ім'ям — питає прізвище) і ставить одне перевірочне питання. Потім — «Наступний гість».</p>
+        </div>
       </div>
-      <p id="wakeHint" class="hint">Покличте помічника на ім'я — «…, скажи», «Привіт, …». «Дякую, …» — пауза.</p>
+
+      <div class="stage-bottom">
+        <div class="device-row">
+          <p id="callDevices" class="call-devices"><span id="callDevicesText"></span>
+            <a href="#devices" class="call-devices-link">Змінити</a></p>
+          <div class="volume">
+            <label for="volume" class="sr-only">Гучність</label>
+            <span class="volume-icon" aria-hidden="true"></span>
+            <input id="volume" type="range" min="0" max="100" step="5">
+            <span id="volumeValue" class="volume-value"></span>
+          </div>
+        </div>
+
+        <section id="musicCard" class="player" aria-label="Музика">
+          <!-- Extensions and audio types, not «audio/*»: with the wildcard iOS offers the photo library and the camera first. -->
+          <input id="songFile" type="file" accept=".mp3,.m4a,.aac,.wav,.ogg,.opus,.flac,audio/mpeg,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,audio/flac" multiple hidden>
+          <div class="player-row">
+            <button id="songPlay" class="song-play" type="button" disabled>▶ Увімкнути</button>
+            <select id="songSelect" aria-label="Пісня" disabled><option>Пісень ще немає</option></select>
+            <label class="icon-btn-soft icon-plus" for="songFile" title="Додати пісню"><span class="sr-only">Додати пісню</span></label>
+            <button id="songDelete" class="icon-btn-soft icon-trash" type="button" title="Видалити пісню" disabled><span class="sr-only">Видалити</span></button>
+          </div>
+          <div class="song-seek">
+            <span id="songTime">0:00</span>
+            <input id="songSeek" type="range" min="0" max="0" step="1" value="0" aria-label="Позиція в пісні" disabled>
+            <span id="songDuration">0:00</span>
+          </div>
+          <p id="songInfo" class="player-info">Пісні спільні для всіх. Поки грає пісня, помічник мовчить і не чує; якщо розмова ще йде — пісня чекає 5 с тиші.</p>
+        </section>
+
+        <div class="controls">
+          <button id="micMute" class="ctl ctl-mic" type="button" aria-pressed="false" hidden>Вимкнути мікрофон</button>
+          <button id="resume" class="ctl ctl-main ctl-play" hidden>Продовжити</button>
+          <button id="pause" class="ctl ctl-main ctl-pause" hidden>Пауза</button>
+          <button id="talk" class="btn primary big">Почати розмову</button>
+          <button id="nextGuest" class="btn" hidden>Наступний гість</button>
+        </div>
+        <p id="wakeHint" class="wake-hint">Покличте помічника на ім'я — «…, скажи», «Привіт, …». «Дякую, …» — пауза.</p>
+      </div>
     </section>
 
-    <section id="musicCard" class="card">
-      <div class="card-head">
-        <h2>Музика</h2>
-        <label class="btn ghost small-btn file-btn" for="songFile">Додати пісню</label>
-      </div>
-      <!-- Extensions and audio types, not «audio/*»: with the wildcard iOS offers the photo library and the camera first. -->
-      <input id="songFile" type="file" accept=".mp3,.m4a,.aac,.wav,.ogg,.opus,.flac,audio/mpeg,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/ogg,audio/flac" multiple hidden>
-      <div class="row song-row">
-        <select id="songSelect" aria-label="Пісня" disabled><option>Пісень ще немає</option></select>
-        <button id="songPlay" class="btn primary" type="button" disabled>▶ Увімкнути</button>
-        <button id="songDelete" class="btn ghost" type="button" disabled>Видалити</button>
-      </div>
-      <div class="song-seek">
-        <span id="songTime" class="muted small">0:00</span>
-        <input id="songSeek" type="range" min="0" max="0" step="1" value="0" aria-label="Позиція в пісні" disabled>
-        <span id="songDuration" class="muted small">0:00</span>
-      </div>
-      <p id="songInfo" class="hint">Пісні спільні для всіх пристроїв і людей: додали з ноутбука — є й на телефоні колеги. Поки грає пісня, помічник на паузі й мовчить, мікрофон вимкнено. Пісню вмикають і обирають тільки кнопками тут, голосом — ні. Якщо розмова ще йде, пісня чекає 5 секунд тиші.</p>
-    </section>
-
-    <section id="conversation" class="card">
-      <div class="card-head">
+    <section id="conversation" class="convo">
+      <div class="convo-head">
         <h2>Розмова</h2>
-        <div class="head-actions">
-          <a id="historyLink" class="btn ghost small-btn" href="history.html" title="Усі збережені розмови">Історія</a>
-          <button id="copyChat" class="btn ghost small-btn">Скопіювати</button>
-          <button id="newChat" class="btn ghost small-btn">Нова розмова</button>
+        <div class="convo-actions">
+          <button id="copyChat" class="pill-btn ghost">Скопіювати</button>
+          <button id="newChat" class="pill-btn">+ Нова</button>
         </div>
       </div>
       <div id="log" class="log" aria-live="polite">
         <p class="muted empty">Тут з'являтиметься текст розмови.</p>
       </div>
+      <p class="convo-foot">Зберігається автоматично — усе є в «Історії».</p>
     </section>
+  </main>
 
-    <section id="devices" class="card">
-      <h2>Пристрої</h2>
-      <div class="devices">
-        <div>
+  <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+  <aside id="drawer" class="drawer" aria-label="Налаштування розмови" hidden>
+    <div class="drawer-head">
+      <h2>Налаштування</h2>
+      <button id="drawerClose" class="icon-square soft" type="button" aria-label="Закрити"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+
+    <section id="devices" class="drawer-section">
+      <h3>Пристрої</h3>
+      <div class="group">
+        <div class="group-row">
           <label for="micSelect">Мікрофон</label>
           <select id="micSelect"><option value="">За замовчуванням</option></select>
         </div>
-        <div>
+        <div class="group-row">
           <label for="speakerSelect">Динамік</label>
           <select id="speakerSelect"><option value="">За замовчуванням</option></select>
           <p id="speakerFixed" class="device-fixed" hidden></p>
         </div>
-        <div>
+        <div class="group-row">
           <label for="cameraSelect">Камера</label>
           <select id="cameraSelect"><option value="">За замовчуванням</option></select>
+          <!-- Phones and tablets: which side looks. Front — «подивись на мене»; back — what is in front of you. -->
+          <div id="cameraFacing" class="facing" role="group" aria-label="Яка камера" hidden>
+            <button type="button" class="btn" data-facing="user" aria-pressed="true">Фронтальна</button>
+            <button type="button" class="btn" data-facing="environment" aria-pressed="false">Задня</button>
+          </div>
         </div>
       </div>
-      <label class="setting" for="camera">
-        <span class="setting-text">
-          <span class="setting-title">Камера</span>
-          <span id="cameraInfo" class="hint">Попросіть «…, подивись» — погляд через камеру.</span>
-        </span>
-        <input id="camera" type="checkbox" class="switch" role="switch">
-      </label>
-      <!-- Phones and tablets: which side looks. Front — «подивись на мене»; back — what is in front of you. -->
-      <div id="cameraFacing" class="facing" role="group" aria-label="Яка камера" hidden>
-        <button type="button" class="btn" data-facing="user" aria-pressed="true">Фронтальна</button>
-        <button type="button" class="btn" data-facing="environment" aria-pressed="false">Задня</button>
-      </div>
-      <video id="cameraView" class="camera-view" autoplay muted playsinline hidden></video>
       <p id="devicesNow" class="devices-now"></p>
-      <button id="devicesAllow" class="btn small-btn" type="button" hidden>Показати пристрої</button>
+      <button id="devicesAllow" class="pill-btn" type="button" hidden>Показати пристрої</button>
       <p id="devicesInfo" class="hint">Назви пристроїв з'являться, коли браузер дасть доступ до мікрофона.</p>
-      <label class="setting" for="bgListen">
-        <span class="setting-text">
-          <span class="setting-title">Слухати фоном на паузі</span>
-          <span id="bgListenInfo" class="hint">Помічник запам'ятовує, про що говорять поруч, і може нагадати.</span>
-        </span>
-        <input id="bgListen" type="checkbox" class="switch" role="switch" checked>
-      </label>
     </section>
 
-    <section id="voiceCard" class="card">
-      <h2>Звук</h2>
+    <section id="voiceCard" class="drawer-section">
+      <h3>Як говорить</h3>
       <div class="settings">
         <div>
           <label for="speed">Темп</label>
@@ -185,26 +201,37 @@
           </select>
         </div>
       </div>
-      <div class="label-row">
-        <label for="volume">Гучність</label>
-        <span id="volumeValue" class="muted small"></span>
-      </div>
-      <input id="volume" type="range" min="0" max="100" step="5">
-      <p class="hint">Гучність діє одразу, навіть посеред розмови. Новий персонаж — кнопкою вгорі: розмова
-        продовжиться ним з усією пам'яттю. Темп і манера — прохання до персонажа (GPT-Live не має
-        регулятора швидкості й тону): вони діють на кожну наступну відповідь, голос лишається його. Зразок звучить
-        звичайним темпом.</p>
-      <label class="setting" for="voiceNow">
-        <span class="setting-text">
-          <span class="setting-title">Міняти голос посеред відповіді</span>
-          <span id="voiceNowInfo" class="hint">Відповідь договорить уже новий персонаж.</span>
-        </span>
-        <input id="voiceNow" type="checkbox" class="switch" role="switch" checked>
-      </label>
+      <p class="hint">Темп і манера — прохання до персонажа, а не точний регулятор: діють з наступної відповіді.</p>
     </section>
 
-    <footer class="muted small">Розмови зберігаються на сервері й лишаються після оновлення сторінки — усі вони в «Історії».</footer>
-  </main>
+    <section class="drawer-section">
+      <h3>Поведінка</h3>
+      <div class="group">
+        <label class="setting" for="bgListen">
+          <span class="setting-text">
+            <span class="setting-title">Слухати фоном на паузі</span>
+            <span id="bgListenInfo" class="hint">Помічник запам'ятовує, про що говорять поруч, і може нагадати.</span>
+          </span>
+          <input id="bgListen" type="checkbox" class="switch" role="switch" checked>
+        </label>
+        <label class="setting" for="voiceNow">
+          <span class="setting-text">
+            <span class="setting-title">Міняти голос одразу</span>
+            <span id="voiceNowInfo" class="hint">Відповідь договорить уже новий персонаж.</span>
+          </span>
+          <input id="voiceNow" type="checkbox" class="switch" role="switch" checked>
+        </label>
+        <label class="setting" for="camera">
+          <span class="setting-text">
+            <span class="setting-title">Камера</span>
+            <span id="cameraInfo" class="hint">Попросіть «…, подивись» — погляд через камеру.</span>
+          </span>
+          <input id="camera" type="checkbox" class="switch" role="switch">
+        </label>
+      </div>
+    </section>
+  </aside>
+
   <dialog id="noMic" class="dialog" aria-labelledby="noMicTitle">
     <h2 id="noMicTitle">Мікрофон у цьому браузері недоступний</h2>
     <p id="noMicText"></p>

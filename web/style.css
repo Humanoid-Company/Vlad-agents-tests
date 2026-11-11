@@ -1,15 +1,16 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
 :root {
-  --bg: #f6f7f9;
+  --bg: #f3f4f7;
   --card: #ffffff;
-  --text: #16181d;
-  --muted: #5d6470;
-  --line: #e3e6eb;
-  --accent: #2f6fed;
+  --text: #14161b;
+  --muted: #5e6370;
+  --line: #e2e4ea;
+  --accent: #4a4fc4;
   --accent-text: #ffffff;
   --ok: #1f9d55;
   --warn: #c27c0e;
   --err: #d14343;
-  --user: #eef3ff;
+  --user: #ececfb;
   --bot: #f1f2f4;
   --switch-off: #cfd4dc;
 }
@@ -20,8 +21,9 @@
     --text: #e8eaed;
     --muted: #9aa1ad;
     --line: #2a2f39;
-    --accent: #5b8ef5;
-    --user: #1c2742;
+    --accent: #8b8ff0;
+    --accent-text: #14161b;
+    --user: #262a4d;
     --bot: #1f232b;
     --switch-off: #3a404c;
   }
@@ -31,7 +33,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 16px/1.5 Manrope, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 .wrap { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
 h1 { font-size: 1.6rem; margin: 0 0 4px; }
@@ -41,8 +43,8 @@ h2 { font-size: 1.05rem; margin: 0 0 8px; }
 .card {
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 16px;
+  border-radius: 20px;
+  padding: 18px;
   margin-top: 16px;
 }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -113,7 +115,7 @@ input[type="range"] { width: 100%; padding: 0; border: 0; background: none; acce
   background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   transition: transform 0.2s ease;
 }
-.switch:checked { background: var(--ok); }
+.switch:checked { background: var(--accent); }
 .switch:checked::before { transform: translateX(22px); }
 .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
